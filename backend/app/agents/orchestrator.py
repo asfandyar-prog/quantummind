@@ -93,6 +93,7 @@ async def run_agent(
     user_message: str,
     chat_history: list[dict] | None = None,
     mode: str = "guided",
+    thread_id: str = "default",
 ) -> str:
     """
     Full pipeline: route the message then run the correct agent.
@@ -123,30 +124,31 @@ async def run_agent(
     # We use if/elif instead of a dict of functions because each agent
     # might need different arguments in future (RAG needs context, etc.)
     if agent_name == "theory":
-        return await run_theory_agent(user_message, chat_history)
+        return await run_theory_agent(user_message, chat_history, thread_id)
 
     elif agent_name == "code":
-        return await run_code_agent(user_message, chat_history)
+        return await run_code_agent(user_message, chat_history, thread_id)
 
     elif agent_name == "rag":
         # RAG agent not built yet — fall back to theory agent
         # with a note. We'll replace this in Phase 2.
         print("[Orchestrator] RAG agent not yet implemented, using theory agent")
-        return await run_theory_agent(user_message, chat_history)
+        return await run_theory_agent(user_message, chat_history, thread_id)
 
     elif agent_name == "review":
         # Review agent not built yet — fall back to code agent
         print("[Orchestrator] Review agent not yet implemented, using code agent")
-        return await run_code_agent(user_message, chat_history)
+        return await run_code_agent(user_message, chat_history, thread_id)
 
     else:
-        return await run_theory_agent(user_message, chat_history)
+        return await run_theory_agent(user_message, chat_history, thread_id)
 
 
 async def stream_agent(
     user_message: str,
     chat_history: list[dict] | None = None,
     mode: str = "guided",
+    thread_id: str = "default",
 ):
     """
     Full pipeline in STREAMING mode.
@@ -169,9 +171,9 @@ async def stream_agent(
 
     # Stream from the correct agent
     if agent_name in ("theory", "rag", "review"):
-        async for token in stream_theory_agent(user_message, chat_history):
+        async for token in stream_theory_agent(user_message, chat_history, thread_id):
             yield token
 
     elif agent_name == "code":
-        async for token in stream_code_agent(user_message, chat_history):
+        async for token in stream_code_agent(user_message, chat_history, thread_id):
             yield token
