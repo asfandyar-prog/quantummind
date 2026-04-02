@@ -142,6 +142,17 @@ async def validate_code(state: CodeAgentState) -> dict:
     if not code:
         return {"execution_error": "No code was generated."}
 
+    # Resolve the correct Python executable.
+    # sys.executable points to the venv Python when running via uv run.
+    # VIRTUAL_ENV env var gives us the venv root as a fallback.
+    venv = os.environ.get('VIRTUAL_ENV', '')
+    if venv:
+        python_exe = os.path.join(venv, 'Scripts', 'python.exe') if sys.platform == 'win32' else os.path.join(venv, 'bin', 'python')
+        if not os.path.exists(python_exe):
+            python_exe = sys.executable
+    else:
+        python_exe = sys.executable
+
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.py', delete=False, encoding='utf-8'
     ) as f:
@@ -150,7 +161,7 @@ async def validate_code(state: CodeAgentState) -> dict:
 
     try:
         result = subprocess.run(
-            [sys.executable, tmp_path],
+            [python_exe, tmp_path],
             capture_output=True,
             text=True,
             timeout=30,
