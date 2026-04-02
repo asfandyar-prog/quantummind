@@ -26,6 +26,7 @@ from langgraph.graph import StateGraph, END
 
 from app.core.config import settings
 from app.core.prompts import CODE_PROMPT
+from app.core.memory import checkpointer
 
 
 # ── STATE ─────────────────────────────────────────────────────
@@ -341,7 +342,7 @@ def build_code_agent_graph():
         {"retry": "explain_code", "done": "assemble_response"}
     )
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # Compiled once at module load — reused across all requests
@@ -355,7 +356,12 @@ code_agent_graph = build_code_agent_graph()
 async def run_code_agent(
     user_message: str,
     chat_history: list | None = None,
+    thread_id: str = "default",
 ) -> str:
+    """
+    Runs the full LangGraph code agent with persistent memory.
+    thread_id identifies the conversation — same ID resumes history.
+    """
     initial_state: CodeAgentState = {
         "user_message":     user_message,
         "chat_history":     chat_history or [],
@@ -367,20 +373,23 @@ async def run_code_agent(
         "retry_count":      0,
         "final_response":   "",
     }
-    result = await code_agent_graph.ainvoke(initial_state)
+    # config carries the thread_id to the checkpointer.
+    # LangGraph uses this to load and save state for this conversation.
+    config = {"configurable": {"thread_id": thread_id}}
+    result = await code_agent_graph.ainvoke(initial_state, config=config)
     return result.get("final_response", "Sorry, I could not generate a response.")
 
 
 async def stream_code_agent(
     user_message: str,
     chat_history: list | None = None,
+    thread_id: str = "default",
 ):
     """
     Streams the final response word by word.
-    The full agentic loop runs first, then we stream the result.
-    Future: stream node-level progress events (Generating... Validating...)
+    Full agentic loop runs with memory, then streams the result.
     """
-    response = await run_code_agent(user_message, chat_history)
+    response = await run_code_agent(user_message, chat_history, thread_id)
     words = response.split(" ")
     for i, word in enumerate(words):
         yield word + (" " if i < len(words) - 1 else "")
