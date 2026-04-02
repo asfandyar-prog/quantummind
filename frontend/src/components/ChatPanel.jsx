@@ -6,6 +6,18 @@ const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
 const BACKEND_URL = 'http://localhost:8000'
 
+// Generate a unique thread_id per browser session.
+// localStorage persists across page refreshes but not across browsers.
+// This means each device gets its own conversation history.
+function getThreadId() {
+  let id = localStorage.getItem('qm_thread_id')
+  if (!id) {
+    id = 'thread_' + Date.now() + '_' + Math.random().toString(36).slice(2)
+    localStorage.setItem('qm_thread_id', id)
+  }
+  return id
+}
+
 const SUGGESTIONS = {
   theory:   ['What is quantum superposition?', 'Explain entanglement in simple terms', 'How does a quantum gate work?', 'What makes quantum computers faster?'],
   guided:   ['Start the Quantum Basics lesson', 'Explain superposition with an example', 'Show me the Hadamard gate in Qiskit', 'What is a Bell State?'],
@@ -54,7 +66,7 @@ export default function ChatPanel() {
       const response = await fetch(`${BACKEND_URL}/api/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, mode, chat_history: history }),
+        body: JSON.stringify({ message: msg, mode, chat_history: history, thread_id: getThreadId() }),
       })
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
