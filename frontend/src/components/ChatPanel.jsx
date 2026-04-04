@@ -89,11 +89,19 @@ export default function ChatPanel() {
           if (!line.startsWith('data: ')) continue
           try {
             const event = JSON.parse(line.slice(6))
+            if (event.type === 'progress' && !aiResponse) {
+              // Show progress message while LLM is thinking
+              useAppState.setState(s => ({
+                messages: s.messages.map(m =>
+                  m.id === aiId ? { ...m, content: '', progress: event.content } : m
+                )
+              }))
+            }
             if (event.type === 'token') {
               aiResponse += event.content
               useAppState.setState(s => ({
                 messages: s.messages.map(m =>
-                  m.id === aiId ? { ...m, content: aiResponse } : m
+                  m.id === aiId ? { ...m, content: aiResponse, progress: null } : m
                 )
               }))
             }
@@ -199,14 +207,24 @@ function EmptyState({ mode, onSuggest }) {
 }
 
 // Renders text with **bold** and *italic* and proper line breaks
-function MessageContent({ content, isAI }) {
+function MessageContent({ content, isAI, progress }) {
   if (!content) {
     return (
-      <motion.span
-        style={{ opacity: 0.4 }}
-        animate={{ opacity: [0.4, 1, 0.4] }}
-        transition={{ duration: 1.2, repeat: Infinity }}
-      >●●●</motion.span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <motion.div
+          style={{ display: 'flex', gap: '4px' }}
+        >
+          {[0,1,2].map(i => (
+            <motion.span
+              key={i}
+              style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#007AFF', display: 'inline-block' }}
+              animate={{ y: [0, -6, 0] }}
+              transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.15 }}
+            />
+          ))}
+        </motion.div>
+        {progress && <span style={{ fontSize: '13px', color: '#6C6C70', fontStyle: 'italic' }}>{progress}</span>}
+      </div>
     )
   }
 
@@ -239,7 +257,7 @@ function Message({ msg }) {
         {isAI ? 'QuantumMind AI' : 'You'}
       </span>
       <div style={{ maxWidth:'78%', padding:'13px 17px', fontSize:'15px', lineHeight:'1.7', fontFamily:FONT, color: isAI ? '#1C1C1E' : '#FFFFFF', background: isAI ? '#F2F2F7' : 'linear-gradient(135deg, #007AFF, #1A8FFF)', borderRadius: isAI ? '4px 18px 18px 18px' : '18px 4px 18px 18px', boxShadow: isAI ? '0 1px 3px rgba(0,0,0,0.06)' : '0 3px 12px rgba(0,122,255,0.28)' }}>
-        <MessageContent content={msg.content} isAI={isAI} />
+        <MessageContent content={msg.content} isAI={isAI} progress={msg.progress} />
       </div>
       {msg.codeBlock && <CodeBlock code={msg.codeBlock} />}
     </motion.div>
