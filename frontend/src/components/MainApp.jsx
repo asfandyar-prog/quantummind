@@ -8,6 +8,7 @@ import CoursePanel from '@/components/CoursePanel'
 import CircuitVisualizer from '@/components/CircuitVisualizer'
 import ConceptCards from '@/components/ConceptCards'
 import CodeEditor from '@/components/CodeEditor'
+import GuidedPanel from '@/components/GuidedPanel'
 import PracticeAssistant from '@/components/PracticeAssistant'
 import clsx from 'clsx'
 
@@ -87,8 +88,19 @@ export default function MainApp() {
           </motion.div>
         )}
 
-        {/* ── THEORY & GUIDED MODE ── */}
-        {!isPractice && !isCourse && (
+        {/* ── GUIDED MODE ── */}
+        {!isPractice && !isCourse && mode === 'guided' && (
+          <motion.div
+            key="guided"
+            style={{ display:'flex', flex:1, overflow:'hidden' }}
+            initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ duration:0.3 }}
+          >
+            <GuidedPanel />
+          </motion.div>
+        )}
+
+        {/* ── THEORY MODE ── */}
+        {!isPractice && !isCourse && mode !== 'guided' && (
           <motion.div
             key="chat"
             style={{ display:'flex', flex:1, overflow:'hidden' }}

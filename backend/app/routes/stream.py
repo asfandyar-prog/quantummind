@@ -115,6 +115,7 @@ async def stream(request: StreamRequest):
                 chat_history=request.chat_history,
                 mode=request.mode,
                 thread_id=request.thread_id,
+                week=request.week,
             ):
                 yield format_token_event(token)
                 # Each yield sends one SSE event to the browser immediately.

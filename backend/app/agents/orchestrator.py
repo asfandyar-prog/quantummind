@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.prompts import ORCHESTRATOR_PROMPT
 from app.agents.theory_agent import run_theory_agent, stream_theory_agent
 from app.agents.code_agent import run_code_agent, stream_code_agent
+from app.agents.rag_agent import run_rag_agent, stream_rag_agent
 
 
 # Valid agent names — used to validate the LLM's routing decision
@@ -94,6 +95,7 @@ async def run_agent(
     chat_history: list[dict] | None = None,
     mode: str = "guided",
     thread_id: str = "default",
+    week: int = 0,
 ) -> str:
     """
     Full pipeline: route the message then run the correct agent.
@@ -149,6 +151,7 @@ async def stream_agent(
     chat_history: list[dict] | None = None,
     mode: str = "guided",
     thread_id: str = "default",
+    week: int = 0,
 ):
     """
     Full pipeline in STREAMING mode.

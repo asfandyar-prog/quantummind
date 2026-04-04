@@ -20,7 +20,7 @@ export default function CourseSidebar({ activeTopicId, onSelectTopic, completedT
   return (
     <motion.aside
       style={{
-        width: '280px', minWidth: '280px',
+        width: '320px', minWidth: '320px',
         display: 'flex', flexDirection: 'column',
         background: '#FAFAFA',
         borderRight: '1px solid rgba(0,0,0,0.08)',

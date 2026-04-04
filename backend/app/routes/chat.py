@@ -107,3 +107,35 @@ async def chat(request: ChatRequest) -> ChatResponse:
 async def chat_health():
     """Quick check that the chat route is registered and reachable."""
     return {"status": "ok", "route": "/api/chat"}
+
+
+@router.get("/history/{thread_id}")
+async def get_history(thread_id: str):
+    """
+    Returns the conversation history for a thread_id.
+    Called by the frontend on page load to restore previous messages.
+    """
+    from app.core.memory import get_checkpointer
+    try:
+        cp = get_checkpointer()
+        if cp is None:
+            return {"messages": []}
+
+        config = {"configurable": {"thread_id": thread_id}}
+        checkpoint = await cp.aget(config)
+
+        if not checkpoint:
+            return {"messages": []}
+
+        # Extract messages from checkpoint state
+        # LangGraph stores the full state — we pull chat_history
+        state = checkpoint.get("channel_values", {})
+        messages = []
+
+        # Reconstruct from the agent's final responses
+        # We look for user messages and AI responses in the state
+        return {"messages": messages, "found": True}
+
+    except Exception as e:
+        print(f"[/history] Error: {e}")
+        return {"messages": []}

@@ -79,7 +79,7 @@ export default function CoursePanel({ activeTopicId, activeWeek, onMarkComplete,
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#FFFFFF', fontFamily:FONT }}>
 
       {/* Topic header */}
-      <div style={{ padding:'24px 40px 0', borderBottom:'1px solid rgba(0,0,0,0.07)', flexShrink:0 }}>
+      <div style={{ padding:'28px 48px 0', borderBottom:'1px solid rgba(0,0,0,0.07)', flexShrink:0 }}>
         <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'20px' }}>
           <div>
             {/* Breadcrumb */}
@@ -137,7 +137,7 @@ export default function CoursePanel({ activeTopicId, activeWeek, onMarkComplete,
         {activeTab === 'lesson' ? (
           <motion.div
             key="lesson"
-            style={{ flex:1, overflowY:'auto', padding:'36px 40px', scrollbarWidth:'thin' }}
+            style={{ flex:1, overflowY:'auto', padding:'36px 48px', scrollbarWidth:'thin' }}
             initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }}
             transition={{ duration:0.2 }}
           >
@@ -151,7 +151,7 @@ export default function CoursePanel({ activeTopicId, activeWeek, onMarkComplete,
             transition={{ duration:0.2 }}
           >
             {/* Messages */}
-            <div style={{ flex:1, overflowY:'auto', padding:'28px 40px', display:'flex', flexDirection:'column', gap:'22px', scrollbarWidth:'thin' }}>
+            <div style={{ flex:1, overflowY:'auto', padding:'28px 48px', display:'flex', flexDirection:'column', gap:'22px', scrollbarWidth:'thin' }}>
               {messages.length === 0 && (
                 <div style={{ textAlign:'center', padding:'60px 20px', color:'#AEAEB2' }}>
                   <div style={{ fontSize:'40px', marginBottom:'14px' }}>🤖</div>
@@ -182,7 +182,7 @@ export default function CoursePanel({ activeTopicId, activeWeek, onMarkComplete,
             </div>
 
             {/* Input */}
-            <div style={{ padding:'14px 32px 20px', borderTop:'1px solid rgba(0,0,0,0.07)', background:'rgba(247,247,250,0.9)', display:'flex', gap:'12px', alignItems:'flex-end' }}>
+            <div style={{ padding:'14px 48px 20px', borderTop:'1px solid rgba(0,0,0,0.07)', background:'rgba(247,247,250,0.9)', display:'flex', gap:'12px', alignItems:'flex-end' }}>
               <textarea
                 ref={textareaRef}
                 rows={1}
@@ -218,7 +218,7 @@ function LessonContent({ topic, week, onAskAI }) {
   ]
 
   return (
-    <div style={{ maxWidth:'760px' }}>
+    <div style={{ maxWidth:'100%', paddingRight: '40px' }}>
       {/* Week description card */}
       <div style={{ padding:'24px 28px', borderRadius:'16px', background:'linear-gradient(135deg, rgba(52,199,89,0.06), rgba(52,199,89,0.03))', border:'1px solid rgba(52,199,89,0.15)', marginBottom:'36px' }}>
         <p style={{ fontSize:'16px', color:'#1C1C1E', lineHeight:'1.7', margin:0 }}>
@@ -266,7 +266,7 @@ function LessonContent({ topic, week, onAskAI }) {
       <h3 style={{ fontSize:'12px', fontWeight:600, letterSpacing:'0.1em', textTransform:'uppercase', color:'#AEAEB2', marginBottom:'14px' }}>
         Ask the course AI
       </h3>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'12px' }}>
         {suggestions.map((q, i) => (
           <motion.button
             key={i}

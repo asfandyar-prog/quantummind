@@ -26,7 +26,7 @@ from langgraph.graph import StateGraph, END
 
 from app.core.config import settings
 from app.core.prompts import CODE_PROMPT
-from app.core.memory import checkpointer
+from app.core.memory import get_checkpointer
 
 
 # ── STATE ─────────────────────────────────────────────────────
@@ -342,11 +342,17 @@ def build_code_agent_graph():
         {"retry": "explain_code", "done": "assemble_response"}
     )
 
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=get_checkpointer())
 
 
 # Compiled once at module load — reused across all requests
-code_agent_graph = build_code_agent_graph()
+_code_graph = None
+
+def get_code_graph():
+    global _code_graph
+    if _code_graph is None:
+        _code_graph = build_code_agent_graph()
+    return _code_graph
 
 
 # ════════════════════════════════════════════════════════════════
@@ -376,7 +382,7 @@ async def run_code_agent(
     # config carries the thread_id to the checkpointer.
     # LangGraph uses this to load and save state for this conversation.
     config = {"configurable": {"thread_id": thread_id}}
-    result = await code_agent_graph.ainvoke(initial_state, config=config)
+    result = await get_code_graph().ainvoke(initial_state, config=config)
     return result.get("final_response", "Sorry, I could not generate a response.")
 
 

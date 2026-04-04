@@ -1,31 +1,21 @@
-# ── app/agents/theory_agent.py ────────────────────────────────
-#
-# LangGraph Theory Agent
-#
-# Graph flow:
-#   analyze_depth → generate_explanation → grade_explanation
-#                                               ↙         ↘
-#                                         refine        END
-#                                      (max 1 retry)
-
-from typing import TypedDict
+from typing import TypedDict, Annotated
+import operator
 from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-
 from app.core.config import settings
 from app.core.prompts import THEORY_PROMPT
-from app.core.memory import checkpointer
+from app.core.memory import get_checkpointer
 
 
-# ── STATE ─────────────────────────────────────────────────────
 class TheoryAgentState(TypedDict):
-    user_message: str
-    chat_history: list
-    student_level: str       # beginner / intermediate / advanced
-    explanation: str         # generated explanation
-    grade_feedback: str      # pass / fail from grader
+    # Annotated with operator.add means LangGraph APPENDS to this list
+    # instead of replacing it. This is how memory accumulates naturally.
+    messages: Annotated[list[BaseMessage], operator.add]
+    student_level: str
+    explanation: str
+    grade_feedback: str
     retry_count: int
     final_response: str
 
@@ -38,31 +28,19 @@ def get_llm(temperature: float = 0.7) -> ChatGroq:
     )
 
 
-# ════════════════════════════════════════════════════════════════
-# NODES
-# ════════════════════════════════════════════════════════════════
-
 async def analyze_depth(state: TheoryAgentState) -> dict:
-    """
-    Node 1 — Infer the student's knowledge level from their question.
-
-    A beginner asks "what is superposition?"
-    An intermediate asks "how does decoherence affect superposition?"
-    An advanced student asks "what is the mathematical relationship
-    between superposition and the Bloch sphere representation?"
-
-    The level is used by generate_explanation to calibrate depth.
-    """
+    """Infer student level from their latest message."""
     llm = get_llm(temperature=0.0)
+    # Get the last human message
+    last_msg = ""
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, HumanMessage):
+            last_msg = msg.content
+            break
 
     prompt = f"""Classify this quantum computing question by student level.
-
-Question: {state["user_message"]}
-
-Respond with ONLY one word:
-- "beginner"      → basic concepts, no prior quantum knowledge assumed
-- "intermediate"  → familiar with qubits and basic gates
-- "advanced"      → comfortable with linear algebra and quantum formalism"""
+Question: {last_msg}
+Respond with ONLY one word: "beginner", "intermediate", or "advanced" """
 
     level = await (llm | StrOutputParser()).ainvoke([HumanMessage(content=prompt)])
     level = level.strip().lower()
@@ -70,18 +48,12 @@ Respond with ONLY one word:
         level = "beginner"
 
     print(f"[TheoryAgent] analyze_depth → {level}")
-    return {"student_level": level}
+    return {"student_level": level, "grade_feedback": ""}
 
 
 async def generate_explanation(state: TheoryAgentState) -> dict:
-    """
-    Node 2 — Generate explanation calibrated to student level.
-
-    Adapts the Theory system prompt with level-specific instructions.
-    On retry: uses grade_feedback to improve the explanation.
-    """
+    """Generate explanation using full message history for context."""
     llm = get_llm(temperature=0.7)
-
     level = state.get("student_level", "beginner")
 
     level_instructions = {
@@ -90,59 +62,33 @@ async def generate_explanation(state: TheoryAgentState) -> dict:
         "advanced":     "Include full mathematical formalism. Reference relevant theorems.",
     }
 
-    # Build level-aware system prompt
     system = f"""{THEORY_PROMPT}
 
 IMPORTANT: This student is at {level.upper()} level.
 {level_instructions[level]}"""
 
-    messages = [SystemMessage(content=system)]
+    # Build messages: system prompt + full conversation history
+    # The messages list in state contains the FULL history automatically
+    # because of the Annotated[list, operator.add] — LangGraph accumulates it
+    messages = [SystemMessage(content=system)] + state["messages"]
 
-    for msg in state.get("chat_history", []):
-        if msg["role"] == "user":
-            messages.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "ai":
-            messages.append(AIMessage(content=msg["content"]))
-
-    # On retry — include feedback so LLM knows what to improve
+    # On retry — add feedback
     if state.get("grade_feedback") == "fail" and state.get("retry_count", 0) > 0:
-        refine_msg = f"""Your previous explanation was not clear enough.
-Previous explanation: {state["explanation"]}
-
-Please rewrite it with:
-- Clearer analogies
-- Better structure
-- More concrete examples
-
-Student question: {state["user_message"]}"""
-        messages.append(HumanMessage(content=refine_msg))
-    else:
-        messages.append(HumanMessage(content=state["user_message"]))
+        messages.append(HumanMessage(content=f"Please rewrite your last explanation more clearly. Previous attempt: {state['explanation']}"))
 
     explanation = await (llm | StrOutputParser()).ainvoke(messages)
     print(f"[TheoryAgent] generate_explanation → {len(explanation)} chars")
-    return {"explanation": explanation, "grade_feedback": ""}
+    return {"explanation": explanation}
 
 
 async def grade_explanation(state: TheoryAgentState) -> dict:
-    """
-    Node 3 — Reflection: is the explanation clear for this student's level?
-
-    Same reflection pattern as the Code Agent.
-    A second LLM judges the first LLM's output before the student sees it.
-    """
+    """Quality-check the explanation."""
     llm = get_llm(temperature=0.0)
-
     level = state.get("student_level", "beginner")
 
     prompt = f"""Grade this quantum computing explanation for a {level} student.
-
-Explanation:
-{state["explanation"]}
-
-Does it match the student's level? Is it clear and accurate?
-Respond with ONLY: "pass" or "fail"
-Only fail if genuinely confusing, inaccurate, or wrong level."""
+Explanation: {state["explanation"]}
+Respond with ONLY: "pass" or "fail" """
 
     grade = await (llm | StrOutputParser()).ainvoke([HumanMessage(content=prompt)])
     grade = grade.strip().lower()
@@ -154,37 +100,27 @@ Only fail if genuinely confusing, inaccurate, or wrong level."""
 
 
 async def refine_explanation(state: TheoryAgentState) -> dict:
-    """
-    Node 4 — Increment retry counter before looping back.
-    """
     count = state.get("retry_count", 0) + 1
-    print(f"[TheoryAgent] refine_explanation → retry {count}/1")
+    print(f"[TheoryAgent] refine → retry {count}/1")
     return {"retry_count": count}
 
 
 async def assemble_response(state: TheoryAgentState) -> dict:
-    """
-    Node 5 — Pass explanation to final_response.
-    """
-    return {"final_response": state.get("explanation", "")}
+    explanation = state.get("explanation", "")
+    # Add the AI response to the messages history so it's remembered
+    return {
+        "final_response": explanation,
+        "messages": [AIMessage(content=explanation)],
+    }
 
-
-# ════════════════════════════════════════════════════════════════
-# CONDITIONAL EDGES
-# ════════════════════════════════════════════════════════════════
 
 def should_refine_or_end(state: TheoryAgentState) -> str:
-    grade       = state.get("grade_feedback", "pass")
+    grade      = state.get("grade_feedback", "pass")
     retry_count = state.get("retry_count", 0)
-
     if grade == "fail" and retry_count < 1:
         return "refine"
     return "done"
 
-
-# ════════════════════════════════════════════════════════════════
-# GRAPH CONSTRUCTION
-# ════════════════════════════════════════════════════════════════
 
 def build_theory_agent_graph():
     graph = StateGraph(TheoryAgentState)
@@ -208,15 +144,17 @@ def build_theory_agent_graph():
         {"refine": "refine_explanation", "done": "assemble_response"}
     )
 
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=get_checkpointer())
 
 
-theory_agent_graph = build_theory_agent_graph()
+_theory_graph = None
 
+def get_theory_graph():
+    global _theory_graph
+    if _theory_graph is None:
+        _theory_graph = build_theory_agent_graph()
+    return _theory_graph
 
-# ════════════════════════════════════════════════════════════════
-# PUBLIC INTERFACE
-# ════════════════════════════════════════════════════════════════
 
 async def run_theory_agent(
     user_message: str,
@@ -224,8 +162,8 @@ async def run_theory_agent(
     thread_id: str = "default",
 ) -> str:
     initial_state: TheoryAgentState = {
-        "user_message":  user_message,
-        "chat_history":  chat_history or [],
+        # Only pass the NEW user message — history comes from checkpointer
+        "messages":      [HumanMessage(content=user_message)],
         "student_level": "beginner",
         "explanation":   "",
         "grade_feedback": "",
@@ -233,7 +171,7 @@ async def run_theory_agent(
         "final_response": "",
     }
     config = {"configurable": {"thread_id": thread_id}}
-    result = await theory_agent_graph.ainvoke(initial_state, config=config)
+    result = await get_theory_graph().ainvoke(initial_state, config=config)
     return result.get("final_response", "Sorry, I could not generate a response.")
 
 
