@@ -34,6 +34,16 @@ const MODES = [
     tint: 'rgba(88,86,214,0.06)',
     iconBg: 'rgba(88,86,214,0.1)',
   },
+  {
+    id: 'course',
+    icon: '🎓',
+    title: '13-Week Course',
+    description: 'Structured quantum computing curriculum with weekly chapters, lecture notes, lab code, and RAG-powered AI tutor.',
+    tags: ['Curriculum', 'RAG', 'Labs'],
+    accent: '#34C759',
+    tint: 'rgba(52,199,89,0.06)',
+    iconBg: 'rgba(52,199,89,0.1)',
+  },
 ]
 
 const containerVariants = {
@@ -101,7 +111,7 @@ export default function ModeSelector() {
       {/* Cards grid */}
       <motion.div
         className="grid grid-cols-3 w-full"
-        style={{ gap: '24px', maxWidth: '980px' }}
+        style={{ gap: '24px', maxWidth: '980px', gridTemplateColumns: 'repeat(2, 1fr)' }}
         variants={containerVariants}
         initial="hidden"
         animate="visible"

@@ -77,6 +77,23 @@ qc.draw('text')`,
   // Clear chat (used when switching modules)
   clearMessages: () => set({ messages: [] }),
 
+  // ── COURSE PROGRESS ──────────────────────────────────────────
+  // Which topics the student has completed in the course
+  completedTopics: [],
+  markTopicComplete: (topicId) =>
+    set((state) => ({
+      completedTopics: state.completedTopics.includes(topicId)
+        ? state.completedTopics
+        : [...state.completedTopics, topicId],
+    })),
+
+  // Active course topic
+  activeTopicId: null,
+  setActiveTopicId: (id) => set({ activeTopicId: id }),
+
+  activeWeek: 1,
+  setActiveWeek: (week) => set({ activeWeek: week }),
+
   // ── STREAMING STATE ───────────────────────────────────────────
   // Whether the AI is currently generating a response.
   // Used to show the typing indicator and disable the send button.
