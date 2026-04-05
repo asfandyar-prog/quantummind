@@ -9,6 +9,7 @@ import CircuitVisualizer from '@/components/CircuitVisualizer'
 import ConceptCards from '@/components/ConceptCards'
 import CodeEditor from '@/components/CodeEditor'
 import GuidedPanel from '@/components/GuidedPanel'
+import ExamMode from '@/components/ExamMode'
 import PracticeAssistant from '@/components/PracticeAssistant'
 import clsx from 'clsx'
 
@@ -41,6 +42,7 @@ export default function MainApp() {
 
   const meta       = MODE_META[mode] ?? MODE_META.guided
   const isTheory   = mode === 'theory'
+  const isExam     = mode === 'exam'
   const isPractice = mode === 'practice'
   const isCourse   = mode === 'course'
 
@@ -88,8 +90,19 @@ export default function MainApp() {
           </motion.div>
         )}
 
+        {/* ── EXAM MODE ── */}
+        {isExam && (
+          <motion.div
+            key="exam"
+            style={{ display:'flex', flex:1, overflow:'hidden' }}
+            initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ duration:0.3 }}
+          >
+            <ExamMode />
+          </motion.div>
+        )}
+
         {/* ── GUIDED MODE ── */}
-        {!isPractice && !isCourse && mode === 'guided' && (
+        {!isPractice && !isCourse && !isExam && mode === 'guided' && (
           <motion.div
             key="guided"
             style={{ display:'flex', flex:1, overflow:'hidden' }}
@@ -100,7 +113,7 @@ export default function MainApp() {
         )}
 
         {/* ── THEORY MODE ── */}
-        {!isPractice && !isCourse && mode !== 'guided' && (
+        {!isPractice && !isCourse && !isExam && mode !== 'guided' && (
           <motion.div
             key="chat"
             style={{ display:'flex', flex:1, overflow:'hidden' }}
