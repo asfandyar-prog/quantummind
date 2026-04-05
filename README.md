@@ -62,30 +62,96 @@ It's the platform I wish existed when I designed and taught the University of De
 
 <div align="center">
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│                           ORCHESTRATOR                                  │
-│                    routes by mode → correct agent                       │
-│                                                                         │
-└────────┬──────────┬──────────┬──────────┬──────────┬───────────────────┘
-         │          │          │          │          │
-    ┌────▼───┐ ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐
-    │THEORY  │ │  CODE  │ │  RAG   │ │LESSON  │ │  EXAM  │
-    │        │ │        │ │        │ │        │ │        │
-    │1 call  │ │1-2 call│ │2 calls │ │1 call  │ │1 call  │
-    │XML     │ │Real    │ │Chroma  │ │Det.    │ │V1/V2   │
-    │prompt  │ │Qiskit  │ │DB      │ │sanitiz.│ │V3      │
-    │+cache  │ │exec    │ │+grade  │ │+grade  │ │+grade  │
-    └────────┘ └────────┘ └────────┘ └────────┘ └────────┘
-         │          │                               │
-    ┌────▼──────────▼───────────────────────────────▼────┐
-    │                                                     │
-    │  MEMORY (MemorySaver)  ·  CACHE (LRU 200 items)    │
-    │  AUDIT DB (SQLite append-only)                      │
-    │                                                     │
-    └─────────────────────────────────────────────────────┘
-```
+<svg width="860" height="380" viewBox="0 0 860 380" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="orchGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#0066FF"/>
+      <stop offset="100%" style="stop-color:#7C3AED"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L6,3 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <!-- Orchestrator -->
+  <rect x="230" y="16" width="400" height="56" rx="12" fill="url(#orchGrad)" opacity="0.9"/>
+  <text x="430" y="40" font-family="system-ui,sans-serif" font-size="14" font-weight="700" fill="white" text-anchor="middle">ORCHESTRATOR</text>
+  <text x="430" y="58" font-family="system-ui,sans-serif" font-size="11" fill="rgba(255,255,255,0.75)" text-anchor="middle">routes by mode → correct agent</text>
+
+  <!-- Connector lines -->
+  <line x1="290" y1="72" x2="80"  y2="130" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="350" y1="72" x2="230" y2="130" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="430" y1="72" x2="390" y2="130" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="510" y1="72" x2="560" y2="130" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="570" y1="72" x2="710" y2="130" stroke="#333" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Theory Agent -->
+  <rect x="10"  y="130" width="140" height="110" rx="10" fill="#0A0A0A" stroke="#0066FF" stroke-width="1.5" stroke-opacity="0.5"/>
+  <rect x="10"  y="130" width="140" height="5"   rx="3"  fill="#0066FF"/>
+  <text x="80"  y="156" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="white"       text-anchor="middle">THEORY</text>
+  <text x="80"  y="172" font-family="monospace"            font-size="10" fill="#00D084"                        text-anchor="middle">● 1 LLM call</text>
+  <text x="80"  y="187" font-family="system-ui,sans-serif" font-size="10" fill="#666"                           text-anchor="middle">XML prompt</text>
+  <text x="80"  y="201" font-family="system-ui,sans-serif" font-size="10" fill="#666"                           text-anchor="middle">Level inference</text>
+  <text x="80"  y="215" font-family="system-ui,sans-serif" font-size="10" fill="#0066FF"                        text-anchor="middle">+ LRU cache</text>
+
+  <!-- Code Agent -->
+  <rect x="165" y="130" width="140" height="110" rx="10" fill="#0A0A0A" stroke="#00D084" stroke-width="1.5" stroke-opacity="0.5"/>
+  <rect x="165" y="130" width="140" height="5"   rx="3"  fill="#00D084"/>
+  <text x="235" y="156" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="white"  text-anchor="middle">CODE</text>
+  <text x="235" y="172" font-family="monospace"            font-size="10" fill="#00D084"                    text-anchor="middle">● 1–2 calls</text>
+  <text x="235" y="187" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Real Qiskit exec</text>
+  <text x="235" y="201" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Circuit diagram</text>
+  <text x="235" y="215" font-family="system-ui,sans-serif" font-size="10" fill="#00D084"                    text-anchor="middle">Det. sanitizer</text>
+
+  <!-- RAG Agent -->
+  <rect x="320" y="130" width="140" height="110" rx="10" fill="#0A0A0A" stroke="#7C3AED" stroke-width="1.5" stroke-opacity="0.5"/>
+  <rect x="320" y="130" width="140" height="5"   rx="3"  fill="#7C3AED"/>
+  <text x="390" y="156" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="white"  text-anchor="middle">RAG</text>
+  <text x="390" y="172" font-family="monospace"            font-size="10" fill="#00D084"                    text-anchor="middle">● 2 LLM calls</text>
+  <text x="390" y="187" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">ChromaDB</text>
+  <text x="390" y="201" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Week-filtered</text>
+  <text x="390" y="215" font-family="system-ui,sans-serif" font-size="10" fill="#7C3AED"                    text-anchor="middle">HuggingFace emb.</text>
+
+  <!-- Lesson Agent -->
+  <rect x="475" y="130" width="140" height="110" rx="10" fill="#0A0A0A" stroke="#FF6B00" stroke-width="1.5" stroke-opacity="0.5"/>
+  <rect x="475" y="130" width="140" height="5"   rx="3"  fill="#FF6B00"/>
+  <text x="545" y="156" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="white"  text-anchor="middle">LESSON</text>
+  <text x="545" y="172" font-family="monospace"            font-size="10" fill="#00D084"                    text-anchor="middle">● 1 call each</text>
+  <text x="545" y="187" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Plan · Teach</text>
+  <text x="545" y="201" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Grade</text>
+  <text x="545" y="215" font-family="system-ui,sans-serif" font-size="10" fill="#FF6B00"                    text-anchor="middle">Det. code fix</text>
+
+  <!-- Exam Agent -->
+  <rect x="630" y="130" width="140" height="110" rx="10" fill="#0A0A0A" stroke="#FF3B30" stroke-width="1.5" stroke-opacity="0.5"/>
+  <rect x="630" y="130" width="140" height="5"   rx="3"  fill="#FF3B30"/>
+  <text x="700" y="156" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="white"  text-anchor="middle">EXAM</text>
+  <text x="700" y="172" font-family="monospace"            font-size="10" fill="#00D084"                    text-anchor="middle">● 1 call + 0</text>
+  <text x="700" y="187" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">V1 · V2 · V3</text>
+  <text x="700" y="201" font-family="system-ui,sans-serif" font-size="10" fill="#666"                       text-anchor="middle">Adaptive</text>
+  <text x="700" y="215" font-family="system-ui,sans-serif" font-size="10" fill="#FF3B30"                    text-anchor="middle">Det. routing</text>
+
+  <!-- Bottom lines to infrastructure -->
+  <line x1="80"  y1="240" x2="220" y2="290" stroke="#222" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="235" y1="240" x2="280" y2="290" stroke="#222" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="390" y1="240" x2="430" y2="290" stroke="#222" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="700" y1="240" x2="610" y2="290" stroke="#222" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Infrastructure bar -->
+  <rect x="10"  y="290" width="260" height="72" rx="10" fill="#0D0D0D" stroke="#333" stroke-width="1"/>
+  <text x="140" y="316" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#555" text-anchor="middle">MEMORY</text>
+  <text x="140" y="333" font-family="monospace"            font-size="10" fill="#0066FF"                   text-anchor="middle">MemorySaver</text>
+  <text x="140" y="349" font-family="system-ui,sans-serif" font-size="10" fill="#444"                       text-anchor="middle">thread_id sessions</text>
+
+  <rect x="290" y="290" width="260" height="72" rx="10" fill="#0D0D0D" stroke="#333" stroke-width="1"/>
+  <text x="420" y="316" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#555" text-anchor="middle">CACHE</text>
+  <text x="420" y="333" font-family="monospace"            font-size="10" fill="#0066FF"                   text-anchor="middle">LRU · 200 items · 1hr TTL</text>
+  <text x="420" y="349" font-family="system-ui,sans-serif" font-size="10" fill="#444"                       text-anchor="middle">common questions ~50ms</text>
+
+  <rect x="570" y="290" width="270" height="72" rx="10" fill="#0D0D0D" stroke="#333" stroke-width="1"/>
+  <text x="705" y="316" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#555" text-anchor="middle">AUDIT DB</text>
+  <text x="705" y="333" font-family="monospace"            font-size="10" fill="#0066FF"                   text-anchor="middle">SQLite · append-only</text>
+  <text x="705" y="349" font-family="system-ui,sans-serif" font-size="10" fill="#444"                       text-anchor="middle">exam trails · teacher reviews</text>
+</svg>
 
 </div>
 
