@@ -8,6 +8,8 @@ from app.core.config import settings
 async def lifespan(app: FastAPI):
     from app.core.memory import init_checkpointer
     await init_checkpointer()
+    from app.db.audit_db import init_db
+    init_db()
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
     print(f"   Model       : {settings.groq_model}")
@@ -50,9 +52,11 @@ from app.routes.stream import router as stream_router
 from app.routes.upload import router as upload_router
 from app.routes.execute import router as execute_router
 from app.routes.lesson import router as lesson_router
+from app.routes.exam import router as exam_router
 
 app.include_router(chat_router,   prefix="/api")
 app.include_router(stream_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
 app.include_router(execute_router, prefix="/api")
 app.include_router(lesson_router,  prefix="/api")
+app.include_router(exam_router,    prefix="/api")
