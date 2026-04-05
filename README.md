@@ -51,7 +51,7 @@ It's the platform I wish existed when I designed and taught the University of De
 | ⚛ | **Theory** | AI tutor that infers your level from your question. Ask in plain English or Dirac notation — it adapts. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
 | ⌨ | **Practice** | Monaco editor (VS Code engine). Write Qiskit, hit Run, see your circuit diagram appear as a live image. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
 | 🎯 | **Guided** | Step-by-step lessons with mandatory check questions. You cannot advance until you demonstrate understanding. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
-| 🎓 | **13-Week Course** | Complete curriculum from University of Debrecen. RAG-powered — every answer grounded in actual lecture notes. | ![Premium](https://img.shields.io/badge/Premium-FF9500?style=flat-square) |
+| 🎓 | **13-Week Course** | | ![Premium](https://img.shields.io/badge/Premium-FF9500?style=flat-square) |
 | 📝 | **Exam Mode** | V1 static · V2 conditional · V3 fully adaptive. Scored on accuracy, reasoning, clarity. Voice input. Full audit trail. | ![Research](https://img.shields.io/badge/Research-7C3AED?style=flat-square) |
 
 </div>
