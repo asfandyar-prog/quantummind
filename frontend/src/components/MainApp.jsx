@@ -1,3 +1,4 @@
+import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import useAppState from '@/hooks/useAppState'
@@ -83,10 +84,7 @@ export default function MainApp() {
             style={{ display:'flex', flex:1, overflow:'hidden' }}
             initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ duration:0.3 }}
           >
-            <div style={{ flex:1, overflow:'hidden', minWidth:0 }}>
-              <CodeEditor />
-            </div>
-            <PracticeAssistant />
+            <ResizableSplit left={<CodeEditor />} right={<PracticeAssistant />} />
           </motion.div>
         )}
 
@@ -189,6 +187,63 @@ function Topbar({ meta, onBack }) {
         </button>
       </div>
     </motion.header>
+  )
+}
+
+function ResizableSplit({ left, right }) {
+  const [leftWidth, setLeftWidth] = React.useState(65) // percentage
+  const isDragging = React.useRef(false)
+  const containerRef = React.useRef(null)
+
+  function onMouseDown(e) {
+    isDragging.current = true
+    e.preventDefault()
+  }
+
+  React.useEffect(() => {
+    function onMouseMove(e) {
+      if (!isDragging.current || !containerRef.current) return
+      const rect = containerRef.current.getBoundingClientRect()
+      const pct  = ((e.clientX - rect.left) / rect.width) * 100
+      setLeftWidth(Math.min(Math.max(pct, 30), 80))
+    }
+    function onMouseUp() { isDragging.current = false }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
+  return (
+    <div ref={containerRef} style={{ display:'flex', flex:1, overflow:'hidden', position:'relative' }}>
+      {/* Left panel — Code Editor */}
+      <div style={{ width:`${leftWidth}%`, overflow:'hidden', minWidth:'30%' }}>
+        {left}
+      </div>
+
+      {/* Draggable divider */}
+      <div
+        onMouseDown={onMouseDown}
+        style={{
+          width:'4px', flexShrink:0, cursor:'col-resize',
+          background:'rgba(0,0,0,0.07)',
+          transition:'background 0.15s',
+          position:'relative', zIndex:10,
+          display:'flex', alignItems:'center', justifyContent:'center',
+        }}
+        onMouseEnter={e => e.target.style.background='rgba(0,122,255,0.4)'}
+        onMouseLeave={e => { if (!isDragging.current) e.target.style.background='rgba(0,0,0,0.07)' }}
+      >
+        <div style={{ width:'2px', height:'32px', borderRadius:'1px', background:'rgba(0,0,0,0.15)' }} />
+      </div>
+
+      {/* Right panel — AI Assistant */}
+      <div style={{ flex:1, overflow:'hidden', minWidth:'20%' }}>
+        {right}
+      </div>
+    </div>
   )
 }
 
