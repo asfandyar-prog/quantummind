@@ -433,7 +433,7 @@ quantummind/
 
 <div align="center">
 
-**QuantumMind** · University of Debrecen · 2025
+**QuantumMind** · University of Debrecen · 2026
 
 *Built with intention. Every component earned its place.*
 
