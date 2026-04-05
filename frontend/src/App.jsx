@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import LandingPage   from '@/components/LandingPage'
-import ModeSelector  from '@/components/ModeSelector'
-import MainApp       from '@/components/MainApp'
+import LandingPage        from '@/components/LandingPage'
+import ModeSelector        from '@/components/ModeSelector'
+import MainApp             from '@/components/MainApp'
+import TeacherDashboard    from '@/components/TeacherDashboard'
 
 export default function App() {
   return (
@@ -10,7 +11,7 @@ export default function App() {
         <Route path="/"        element={<LandingPage />} />
         <Route path="/select"  element={<ModeSelector />} />
         <Route path="/app"     element={<MainApp />} />
-        <Route path="/teacher" element={<div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily:'system-ui', fontSize:'18px', color:'#6C6C70' }}>Teacher Dashboard — Coming Soon</div>} />
+        <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="*"        element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
