@@ -76,7 +76,7 @@ export default function ModeSelector() {
 
   return (
     <div
-      className="w-full h-full flex flex-col items-center justify-center px-12 py-16"
+      className="w-full h-full flex flex-col items-center justify-center px-12 py-8"
       style={{
         background: 'linear-gradient(160deg, #EEF4FF 0%, #F2F2F7 50%, #EAF5FF 100%)',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -85,7 +85,7 @@ export default function ModeSelector() {
       {/* Header */}
       <motion.div
         className="text-center"
-        style={{ marginBottom: '56px' }}
+        style={{ marginBottom: '32px' }}
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45 }}
@@ -107,7 +107,7 @@ export default function ModeSelector() {
         </div>
 
         {/* Heading */}
-        <h1 style={{ fontSize: '42px', fontWeight: 700, letterSpacing: '-0.5px', color: '#1C1C1E', lineHeight: 1.2, marginBottom: '14px' }}>
+        <h1 style={{ fontSize: '36px', fontWeight: 700, letterSpacing: '-0.5px', color: '#1C1C1E', lineHeight: 1.2, marginBottom: '14px' }}>
           What do you want to{' '}
           <span className="text-gradient-qm">learn today?</span>
         </h1>
@@ -118,18 +118,27 @@ export default function ModeSelector() {
         </p>
       </motion.div>
 
-      {/* Cards grid */}
+      {/* Cards grid - 3 top, 2 bottom centered */}
       <motion.div
-        className="grid grid-cols-3 w-full"
-        style={{ gap: '24px', maxWidth: '980px', gridTemplateColumns: 'repeat(2, 1fr)' }}
+        style={{ width: '100%', maxWidth: '1060px', display: 'flex', flexDirection: 'column', gap: '20px' }}
         variants={containerVariants}
         initial="hidden"
         animate="visible"
       >
-        {MODES.map((mode) => (
-          <ModeCard key={mode.id} mode={mode} onSelect={handleSelect} />
-        ))}
+        {/* Top row - 3 cards */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+          {MODES.slice(0, 3).map((mode) => (
+            <ModeCard key={mode.id} mode={mode} onSelect={handleSelect} />
+          ))}
+        </div>
+        {/* Bottom row - 2 cards centered */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
+          {MODES.slice(3).map((mode) => (
+            <ModeCard key={mode.id} mode={mode} onSelect={handleSelect} />
+          ))}
+        </div>
       </motion.div>
+
     </div>
   )
 }
