@@ -44,6 +44,16 @@ const MODES = [
     tint: 'rgba(52,199,89,0.06)',
     iconBg: 'rgba(52,199,89,0.1)',
   },
+  {
+    id: 'exam',
+    icon: '📝',
+    title: 'Exam Mode',
+    description: 'AI examiner with adaptive questioning (V1/V2/V3), rubric-based grading, and full audit trail.',
+    tags: ['Adaptive', 'Grading', 'Research'],
+    accent: '#FF9500',
+    tint: 'rgba(255,149,0,0.06)',
+    iconBg: 'rgba(255,149,0,0.1)',
+  },
 ]
 
 const containerVariants = {
