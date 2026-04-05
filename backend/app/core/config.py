@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Where ChromaDB stores its vector files on disk.
     # This folder is created automatically when you first upload a doc.
 
+    teacher_password: str = "quantum2026"
+    # Password for teacher mode. Change this in production!
+
     class Config:
         # Tell Pydantic where to find the .env file.
         # It looks for this file relative to where you RUN the app from.
@@ -85,3 +88,4 @@ def get_settings() -> Settings:
 #   from app.core.config import get_settings; settings = get_settings()
 # Both work — the shorthand is just cleaner for most uses.
 settings = get_settings()
+
