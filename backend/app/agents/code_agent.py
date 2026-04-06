@@ -116,15 +116,15 @@ Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
     code        = extract_code_block(response)
     explanation = extract_explanation(response)
 
-    # # Deterministic pre-fix before execution
-    # code = fix_deprecated(code)
+    # Deterministic pre-fix before execution
+    code = fix_deprecated(code)
 
-    # return {
-    #     "generated_code":   code,
-    #     "explanation":      explanation,
-    #     "execution_output": "",
-    #     "execution_error":  "",
-    # }
+    return {
+        "generated_code":   code,
+        "explanation":      explanation,
+        "execution_output": "",
+        "execution_error":  "",
+    }
 
 
 async def execute_code(state: CodeAgentState) -> dict:
