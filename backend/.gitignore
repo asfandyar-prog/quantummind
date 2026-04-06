@@ -1,0 +1,28 @@
+# ── Frontend ─────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/*.local
+
+# ── Backend ──────────────────────────────────────────────────
+backend/.env
+# .env.example IS committed — it's the template without real keys
+
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+
+backend/.venv/
+# uv creates .venv automatically — never commit it
+# It's like node_modules — anyone can recreate it with: uv sync
+
+backend/data/
+# ChromaDB vector store files — large, machine-specific, regeneratable
+
+backend/.pytest_cache/
+
+# ── General ───────────────────────────────────────────────────
+.DS_Store
+*.log
