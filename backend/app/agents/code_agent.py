@@ -142,9 +142,9 @@ async def execute_code(state: CodeAgentState) -> dict:
     else:
         python_exe = sys.executable
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-        f.write(code)
-        tmp_path = f.name
+    # with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+    #     f.write(code)
+    #     tmp_path = f.name
 
     try:
         result = subprocess.run([python_exe, tmp_path], capture_output=True, text=True, timeout=30)
