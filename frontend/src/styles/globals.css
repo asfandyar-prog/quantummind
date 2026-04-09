@@ -1,1 +1,106 @@
 
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── BASE RESET ──────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: #F2F2F7;
+    color: #1C1C1E;
+    font-family: -apple-system, 'SF Pro Text', Inter, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  #root {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+  }
+}
+
+/* ── SCROLLBAR — macOS style ─────────────────────────────────── */
+@layer utilities {
+  .scrollbar-qm {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.15) transparent;
+  }
+  .scrollbar-qm::-webkit-scrollbar       { width: 5px; }
+  .scrollbar-qm::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-qm::-webkit-scrollbar-thumb {
+    background-color: rgba(0,0,0,0.15);
+    border-radius: 3px;
+  }
+  .scrollbar-qm::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0,0,0,0.25);
+  }
+}
+
+/* ── GRADIENT TEXT ───────────────────────────────────────────── */
+@layer utilities {
+  .text-gradient-qm {
+    background: linear-gradient(135deg, #007AFF 0%, #32ADE6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .text-gradient-guided {
+    background: linear-gradient(135deg, #5856D6 0%, #007AFF 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* ── GLASS EFFECT — frosted macOS style ──────────────────────── */
+@layer utilities {
+  .glass {
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+  }
+  .glass-sidebar {
+    background: rgba(247,247,250,0.90);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}
+
+/* ── ANIMATION DELAYS ────────────────────────────────────────── */
+@layer utilities {
+  .delay-100  { animation-delay: 100ms; }
+  .delay-200  { animation-delay: 200ms; }
+  .delay-300  { animation-delay: 300ms; }
+  .delay-400  { animation-delay: 400ms; }
+  .delay-500  { animation-delay: 500ms; }
+  .delay-700  { animation-delay: 700ms; }
+  .delay-900  { animation-delay: 900ms; }
+  .delay-1000 { animation-delay: 1000ms; }
+  .animate-fill-both { animation-fill-mode: both; }
+}
+
+/* ── APPLE-STYLE SELECTION COLOR ─────────────────────────────── */
+@layer base {
+  ::selection {
+    background: rgba(0,122,255,0.2);
+    color: #007AFF;
+  }
+}
