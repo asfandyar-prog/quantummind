@@ -26,3 +26,6 @@ backend/.pytest_cache/
 # ── General ───────────────────────────────────────────────────
 .DS_Store
 *.log
+
+# screen recordings
+*.mp4
