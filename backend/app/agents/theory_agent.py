@@ -5,24 +5,15 @@
 
 from typing import TypedDict, Annotated
 import operator
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-from app.core.config import settings
+from app.core import llm
 from app.core.memory import get_checkpointer
 
 # ── STATE ─────────────────────────────────────────────────────
 class TheoryAgentState(TypedDict):
     messages:       Annotated[list[BaseMessage], operator.add]
     final_response: str
-
-def get_llm() -> ChatGroq:
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        temperature=0.7,
-    )
 
 # Single rich prompt replaces: analyze_depth + generate + grade + refine
 # The prompt itself handles calibration by instructing the model to
@@ -56,10 +47,9 @@ Modern Qiskit syntax (use ONLY these):
 
 async def generate_response(state: TheoryAgentState) -> dict:
     """Single node — one LLM call handles everything."""
-    llm = get_llm()
     messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"]
     print(f"[TheoryAgent] Generating response (1 LLM call)")
-    response = await (llm | StrOutputParser()).ainvoke(messages)
+    response = await llm.chat(messages, call_type="theory")
     return {
         "final_response": response,
         "messages": [AIMessage(content=response)],
@@ -99,8 +89,6 @@ async def stream_theory_agent(
     thread_id: str = "default",
 ):
     """Stream directly from LLM — no waiting for full response."""
-    llm = get_llm()
-
     # Build message history from checkpointer if available
     messages = [SystemMessage(content=THEORY_SYSTEM)]
 
@@ -114,6 +102,5 @@ async def stream_theory_agent(
     messages.append(HumanMessage(content=user_message))
 
     print(f"[TheoryAgent] Streaming response (1 LLM call)")
-    async for chunk in llm.astream(messages):
-        if chunk.content:
-            yield chunk.content
+    async for token in llm.stream(messages, call_type="theory"):
+        yield token

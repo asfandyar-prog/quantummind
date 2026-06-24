@@ -317,8 +317,12 @@ npm run dev
 ### Environment Variables
 
 ```env
-GROQ_API_KEY=gsk_...              # from console.groq.com
-GROQ_MODEL=llama-3.1-8b-instant   # or llama-3.3-70b-versatile
+LLM_PROVIDER=groq                 # groq | openai | vllm
+LLM_MODEL=llama-3.1-8b-instant    # or llama-3.3-70b-versatile
+LLM_ROUTER_MODEL=llama-3.1-8b-instant
+GROQ_API_KEY=gsk_...              # from console.groq.com (used when LLM_PROVIDER=groq)
+# LLM_API_KEY=                    # key for openai/vllm endpoints
+# LLM_BASE_URL=                   # OpenAI-compatible base URL; required for vllm
 APP_ENV=development
 FRONTEND_URL=http://localhost:5173
 TEACHER_PASSWORD=your_password    # for /teacher dashboard

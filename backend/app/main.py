@@ -12,7 +12,7 @@ async def lifespan(app: FastAPI):
     init_db()
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
-    print(f"   Model       : {settings.groq_model}")
+    print(f"   Model       : {settings.llm_model}")
     print(f"   Frontend URL: {settings.frontend_url}")
     print(f"   Docs        : http://localhost:8000/docs\n")
     yield
@@ -39,7 +39,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "environment": settings.app_env, "model": settings.groq_model}
+    return {"status": "ok", "environment": settings.app_env, "model": settings.llm_model}
 
 
 @app.get("/")

@@ -15,20 +15,10 @@
 import json
 import re
 from typing import TypedDict, Optional
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-from app.core.config import settings
+from app.core import llm
 from app.core.cache import cache
-
-
-def get_llm(temperature: float = 0.3) -> ChatGroq:
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        temperature=temperature,
-    )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -131,7 +121,6 @@ async def generate_question_node(state: QuestionState) -> dict:
         return {"question": questions[idx]}
 
     # V2/V3: AI-generated questions
-    llm = get_llm(temperature=0.4)
     prev = "\n".join([
         f"Q{i+1}: {qa['question']}\nA{i+1}: {qa['answer']}\nScore: {qa.get('score', 'N/A')}/10"
         for i, qa in enumerate(state.get("previous_qa", []))
@@ -149,7 +138,7 @@ async def generate_question_node(state: QuestionState) -> dict:
     )
 
     print(f"[ExamAgent/Q] {state['version']} question #{state['turn_number']} (1 LLM call)")
-    question = await (llm | StrOutputParser()).ainvoke([HumanMessage(content=prompt)])
+    question = await llm.chat([HumanMessage(content=prompt)], call_type="exam_question")
     return {"question": question.strip()}
 
 
@@ -218,16 +207,15 @@ async def grade_answer_node(state: GradeState) -> dict:
     # Cache ideal answers per question (they don't change)
     cached_ideal = cache.get("ideal_answer", state["question"])
 
-    llm = get_llm(temperature=0.0)
     print(f"[ExamAgent/Grade] Grading answer (1 LLM call)")
 
-    response = await (llm | StrOutputParser()).ainvoke([
+    response = await llm.chat([
         HumanMessage(content=GRADE_PROMPT.format(
             question=state["question"],
             student_answer=state["student_answer"],
             topic=state["topic"],
         ))
-    ])
+    ], call_type="exam_grade")
 
     try:
         raw = re.sub(r"```(?:json)?\n?", "", response).strip().rstrip("`").strip()

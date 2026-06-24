@@ -6,10 +6,9 @@ import json
 # We use it to parse the Orchestrator's routing decision.
 # The LLM outputs a JSON string → json.loads() converts it to a dict.
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
 
+from app.core import llm
 from app.core.config import settings
 from app.core.prompts import ORCHESTRATOR_PROMPT
 from app.agents.theory_agent import run_theory_agent, stream_theory_agent
@@ -24,26 +23,6 @@ VALID_AGENTS = {"theory", "code", "rag", "review"}
 DEFAULT_AGENT = "theory"
 
 
-def get_orchestrator_llm() -> ChatGroq:
-    """
-    LLM for routing decisions.
-
-    temperature=0.0 — fully deterministic.
-    The Orchestrator must make consistent routing decisions.
-    The same message should always go to the same agent.
-    Any randomness here would make the system unpredictable.
-
-    We also use the fast 8b model regardless of what's in settings
-    because routing is a simple classification task — it doesn't
-    need a powerful model, just a fast and reliable one.
-    """
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model="llama-3.1-8b-instant",
-        temperature=0.0,
-    )
-
-
 async def route(user_message: str) -> str:
     """
     Asks the Orchestrator LLM which agent should handle this message.
@@ -55,15 +34,12 @@ async def route(user_message: str) -> str:
     Defensive programming is critical in production AI systems because
     LLMs can occasionally produce unexpected output.
     """
-    llm = get_orchestrator_llm()
-    chain = llm | StrOutputParser()
-
     messages = [
         SystemMessage(content=ORCHESTRATOR_PROMPT),
         HumanMessage(content=user_message),
     ]
 
-    raw_response = await chain.ainvoke(messages)
+    raw_response = await llm.chat(messages, call_type="route", model=settings.llm_router_model)
     # raw_response is a string like: '{"agent": "theory", "reason": "..."}'
 
     try:

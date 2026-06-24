@@ -5,20 +5,10 @@
 import json
 import re
 from typing import TypedDict
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-from app.core.config import settings
+from app.core import llm
 from app.core.cache import cache
-
-
-def get_llm(temperature: float = 0.2) -> ChatGroq:
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        temperature=temperature,
-    )
 
 
 # ── Deterministic code sanitizer ──────────────────────────────
@@ -104,12 +94,11 @@ async def generate_plan_node(state: PlanState) -> dict:
         print(f"[LessonAgent/Plan] Cache hit for: {state['topic']}")
         return {"plan": json.loads(cached)}
 
-    llm = get_llm(temperature=0.2)
     print(f"[LessonAgent/Plan] Generating plan (1 LLM call)")
-    response = await (llm | StrOutputParser()).ainvoke([
+    response = await llm.chat([
         SystemMessage(content=PLAN_PROMPT),
         HumanMessage(content=f"Topic: {state['topic']}"),
-    ])
+    ], call_type="lesson_plan")
     raw = response.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
     try:
         plan = json.loads(raw)
@@ -168,7 +157,6 @@ Objective: {objective}
 </rules>"""
 
 async def generate_step_node(state: StepState) -> dict:
-    llm = get_llm(temperature=0.5)
     step   = state["step"]
     points = "\n".join([f"  • {p}" for p in step.get("teaching_points", [])])
     prompt = STEP_PROMPT.format(
@@ -179,10 +167,10 @@ async def generate_step_node(state: StepState) -> dict:
         teaching_points=points,
     )
     print(f"[LessonAgent/Step] Generating step {state['step_num']} (1 LLM call)")
-    content = await (llm | StrOutputParser()).ainvoke([
+    content = await llm.chat([
         SystemMessage(content=prompt),
         HumanMessage(content=f"Teach: {step['title']}"),
-    ])
+    ], call_type="lesson_step")
     return {"final_content": sanitize_content(content)}
 
 def build_step_graph():
@@ -226,15 +214,14 @@ GRADE_PROMPT = """Grade a student's quantum computing answer.
 {{"passed": true or false, "feedback": "one encouraging sentence"}}"""
 
 async def grade_node(state: GradeState) -> dict:
-    llm = get_llm(temperature=0.0)
     print(f"[LessonAgent/Grade] Grading (1 LLM call)")
-    response = await (llm | StrOutputParser()).ainvoke([
+    response = await llm.chat([
         HumanMessage(content=GRADE_PROMPT.format(
             question=state["question"],
             correct_answer=state["correct_answer"],
             student_answer=state["student_answer"],
         ))
-    ])
+    ], call_type="lesson_grade")
     try:
         raw = re.sub(r"```(?:json)?\n?", "", response).strip().rstrip("`").strip()
         result = json.loads(raw)

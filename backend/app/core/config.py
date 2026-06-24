@@ -29,13 +29,6 @@ class Settings(BaseSettings):
     # validator below). Prod (vLLM) starts without a Groq key.
     # Pydantic looks for GROQ_API_KEY in your .env file.
 
-    groq_model: str = "llama-3.1-8b-instant"
-    # str = "llama-3.1-8b-instant" means this has a DEFAULT value.
-    # If GROQ_MODEL is not in .env, it falls back to this string.
-    # Available Groq models:
-    #   llama-3.1-8b-instant   → fastest, great for most responses
-    #   llama-3.1-70b-versatile → smarter, use for complex reasoning
-
     # ── LLM seam ──────────────────────────────────────────────
     # One client (ChatOpenAI) serves all providers; the provider only
     # selects a base URL + how the API key is resolved. See app/core/llm.py.
@@ -88,6 +81,9 @@ class Settings(BaseSettings):
         # backend/.env correctly.
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
+        # Ignore unknown keys in .env (e.g. a leftover GROQ_MODEL after the
+        # rename to LLM_MODEL) instead of failing to start.
         # Always specify encoding — prevents issues on Windows
         # where the default encoding can vary.
 

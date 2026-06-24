@@ -15,11 +15,9 @@ import os
 import re
 import asyncio
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-from app.core.config import settings
+from app.core import llm
 from app.core.memory import get_checkpointer
 
 
@@ -32,16 +30,6 @@ class CodeAgentState(TypedDict):
     execution_error:  str
     retry_count:      int
     final_response:   str
-
-
-def get_llm(temperature: float = 0.1) -> ChatGroq:
-    # temperature=0.1 for code — maximum reliability, minimal creativity
-    # This alone reduces retry rate significantly
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        temperature=temperature,
-    )
 
 
 # Structured prompt with explicit format contract.
@@ -93,7 +81,6 @@ FORBIDDEN (will cause errors):
 
 async def generate(state: CodeAgentState) -> dict:
     """1 LLM call — generates code + explanation together."""
-    llm = get_llm(temperature=0.1)
     messages = [SystemMessage(content=CODE_SYSTEM)] + state["messages"]
 
     if state.get("execution_error") and state.get("retry_count", 0) > 0:
@@ -111,7 +98,7 @@ Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
         messages.append(HumanMessage(content=state["user_message"]))
 
     print(f"[CodeAgent] LLM call #{state.get('retry_count', 0) + 1}")
-    response = await (llm | StrOutputParser()).ainvoke(messages)
+    response = await llm.chat(messages, call_type="code")
 
     code        = extract_code_block(response)
     explanation = extract_explanation(response)

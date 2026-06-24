@@ -12,14 +12,12 @@ from typing import TypedDict, Annotated
 import operator
 import os
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_core.output_parsers import StrOutputParser
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 
-from app.core.config import settings
+from app.core import llm
 from app.core.prompts import RAG_PROMPT, build_rag_prompt
 from app.core.memory import get_checkpointer
 
@@ -50,14 +48,6 @@ class RAGAgentState(TypedDict):
     grade_feedback:   str          # pass / fail
     retry_count:      int
     final_response:   str
-
-
-def get_llm(temperature: float = 0.3) -> ChatGroq:
-    return ChatGroq(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        temperature=temperature,
-    )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -115,8 +105,6 @@ async def generate_answer(state: RAGAgentState) -> dict:
     If chunks exist: uses RAG prompt (grounded in course material).
     If no chunks: falls back to general knowledge with a note.
     """
-    llm = get_llm(temperature=0.3)
-
     last_msg = ""
     for msg in reversed(state["messages"]):
         if isinstance(msg, HumanMessage):
@@ -142,7 +130,7 @@ the answer is from general knowledge, not the course materials."""
     if state.get("grade_feedback") == "fail" and state.get("retry_count", 0) > 0:
         messages.append(HumanMessage(content="Please improve your previous answer. Be more specific and cite the course material more directly."))
 
-    answer = await (llm | StrOutputParser()).ainvoke(messages)
+    answer = await llm.chat(messages, call_type="rag_generate")
     print(f"[RAGAgent] generate_answer → {len(answer)} chars")
     return {"answer": answer}
 
@@ -151,7 +139,6 @@ async def grade_answer(state: RAGAgentState) -> dict:
     """
     Node 3 — Check if the answer is grounded in the retrieved context.
     """
-    llm = get_llm(temperature=0.0)
     chunks = state.get("retrieved_chunks", [])
 
     if not chunks:
@@ -171,7 +158,7 @@ Answer:
 Does the answer reference the course material accurately?
 Respond with ONLY: "pass" or "fail" """
 
-    grade = await (llm | StrOutputParser()).ainvoke([HumanMessage(content=prompt)])
+    grade = await llm.chat([HumanMessage(content=prompt)], call_type="rag_grade")
     grade = grade.strip().lower()
     if grade not in ("pass", "fail"):
         grade = "pass"
