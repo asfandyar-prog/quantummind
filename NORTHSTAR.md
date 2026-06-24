@@ -1,5 +1,11 @@
 # QuantumMind — Production Hardening & Scaling Engineering Brief
 
+
+> Maintained by Asfand Yar, under Prof. Gergő's supervision, University of Debrecen.
+> This is the source-of-truth plan for taking QuantumMind to a production,
+> GDPR-compliant system for live semester use. Update this file when reality
+> diverges from the plan — it is meant to be living, not frozen.
+
 ## How to use this document
 You are working on QuantumMind, an existing multi-agent AI quantum-computing
 education platform (FastAPI + LangGraph + React). This brief is the north star
