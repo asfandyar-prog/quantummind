@@ -1,4 +1,6 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
+from typing import Optional
 # pydantic_settings is an extension of Pydantic specifically for config.
 # It reads environment variables and validates their types automatically.
 # If a required variable is missing, it raises an error BEFORE your app
@@ -22,8 +24,9 @@ class Settings(BaseSettings):
     """
 
     # ── Groq ─────────────────────────────────────────────────
-    groq_api_key: str
-    # str means this field is required — app won't start without it.
+    groq_api_key: Optional[str] = None
+    # Optional now: required only when LLM_PROVIDER=groq (enforced by the
+    # validator below). Prod (vLLM) starts without a Groq key.
     # Pydantic looks for GROQ_API_KEY in your .env file.
 
     groq_model: str = "llama-3.1-8b-instant"
@@ -32,6 +35,15 @@ class Settings(BaseSettings):
     # Available Groq models:
     #   llama-3.1-8b-instant   → fastest, great for most responses
     #   llama-3.1-70b-versatile → smarter, use for complex reasoning
+
+    # ── LLM seam ──────────────────────────────────────────────
+    # One client (ChatOpenAI) serves all providers; the provider only
+    # selects a base URL + how the API key is resolved. See app/core/llm.py.
+    llm_provider: str = "groq"                       # groq | openai | vllm
+    llm_model: str = "llama-3.1-8b-instant"          # single source of truth for the model
+    llm_router_model: str = "llama-3.1-8b-instant"   # cheap model pinned for routing
+    llm_base_url: Optional[str] = None               # overrides per-provider default; required for vllm
+    llm_api_key: Optional[str] = None                # key for openai/vllm; groq falls back to groq_api_key
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
@@ -51,6 +63,23 @@ class Settings(BaseSettings):
 
     teacher_password: str = "quantum2026"
     # Password for teacher mode. Change this in production!
+
+    @model_validator(mode="after")
+    def _validate_provider(self):
+        """Fail fast at startup if the selected provider is misconfigured."""
+        provider = self.llm_provider
+        if provider == "groq":
+            if not (self.llm_api_key or self.groq_api_key):
+                raise ValueError("LLM_PROVIDER=groq requires GROQ_API_KEY (or LLM_API_KEY)")
+        elif provider == "openai":
+            if not self.llm_api_key:
+                raise ValueError("LLM_PROVIDER=openai requires LLM_API_KEY")
+        elif provider == "vllm":
+            if not self.llm_base_url:
+                raise ValueError("LLM_PROVIDER=vllm requires LLM_BASE_URL")
+        else:
+            raise ValueError(f"Unknown LLM_PROVIDER: {provider!r} (use groq|openai|vllm)")
+        return self
 
     class Config:
         # Tell Pydantic where to find the .env file.
