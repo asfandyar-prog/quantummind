@@ -47,9 +47,35 @@ under **GDPR**.
 
 ---
 
+## Known issues (from day-one reconciliation)
+Discovered while reconciling this brief against the real code. The full list lives
+in [`docs/RECONCILIATION.md`](docs/RECONCILIATION.md); these are the ones that change
+how the phases must be planned:
+
+- **Dead RAG route.** The orchestrator never actually calls the RAG agent — a `"rag"`
+  routing decision falls back to the theory agent (`orchestrator.py:136-145`), and the
+  frontend's `course` mode goes through normal routing rather than a course/RAG path. So
+  `rag_agent.py` (a complete retrieve→generate→grade graph) is currently unreachable.
+  Any phase that touches retrieval must wire this up, not assume it works.
+- **Unpersisted in-flight exam question.** `start_exam` stores the current question only
+  in the in-memory `_exam_state` dict (`exam.py:43`), never in the DB. Completed turns are
+  persisted, but a mid-exam restart loses the active question and `submit_answer` returns
+  404. Phase 1's "reconstructable from the store alone" must explicitly cover the active
+  question, not just completed turns.
+- **Teacher-password split-brain.** Two disagreeing sources of truth: `config.py` defaults
+  `teacher_password` to `"quantum2026"`, while `exam.py:17` `verify_teacher` reads
+  `os.environ["TEACHER_PASSWORD"]` directly (default `"quantum2025"`), bypassing the config
+  seam. Phase 4's auth work must collapse these into one authoritative source.
+
+---
+
 ## Phase 0 — LLM Abstraction Layer (the keystone)
-**Goal:** A single internal interface for all model access, so OpenAI today and
-self-hosted vLLM later is a config change, not a rewrite.
+**Goal:** A single internal interface for all model access. Introduce an
+OpenAI-compatible client (`langchain-openai` / the `openai` SDK) as the LLM seam;
+**Groq becomes one configurable provider behind it** (the codebase is currently
+100% `langchain-groq`, with no OpenAI client present). The same client path targets
+self-hosted vLLM in production by a config change (base URL + model + key), not a
+rewrite — because vLLM serves an OpenAI-compatible API.
 
 **Requirements:**
 - Create one module (e.g. `backend/app/core/llm.py`) exposing a provider-agnostic
