@@ -6,6 +6,31 @@
 > `core/llm.py`, and model/temperature are scattered across six agent modules. Phase 0 is
 > therefore a genuine build of the seam, not a relocation of existing OpenAI calls.
 
+## 0. Resolved questions (findings)
+
+Two questions were resolved against the installed source before finalizing this plan.
+
+**(1) Single `ChatOpenAI` client for all providers — including Groq.** `ChatGroq`
+(`langchain_groq/chat_models.py`) wraps the **`groq` SDK**, a different HTTP client from the
+`openai` SDK that `ChatOpenAI`/vLLM use — but everything above it is OpenAI-shaped (OpenAI
+message dicts in, `AIMessage`/`AIMessageChunk.content` out). Our agents only ever do
+`ainvoke → StrOutputParser → str`, `astream → chunk.content`, and parse JSON from the
+**string** themselves; we use no tool-calling, `with_structured_output`, JSON mode, logprobs,
+or `n>1` — i.e. none of the features where the two APIs diverge. Groq exposes an
+OpenAI-compatible endpoint (`https://api.groq.com/openai/v1`), so Groq is reachable via
+`ChatOpenAI` by base-URL + key. **Decision: use one `ChatOpenAI` client for groq/openai/vllm
+and drop `langchain-groq`.** This makes dev exercise the exact prod (vLLM) client path
+continuously, which is the whole point of the seam. The isolation test still bans
+`langchain_groq`/`groq` imports to catch regressions.
+
+**(2) Drop the `groq_model` alias.** Safe. The only non-agent readers are `main.py:15`
+(startup banner) and `main.py:42` (`/health` `"model"` field), which repoint to
+`settings.llm_model`. `README.md` and the real `backend/.env` reference `GROQ_MODEL` (docs /
+local config, not code); README is updated and `.env.example` uses the `LLM_*` names. A
+leftover `GROQ_MODEL` in a local `.env` is silently ignored by pydantic-settings (degrades to
+the default model, never crashes), so the only migration note is "rename `GROQ_MODEL` →
+`LLM_MODEL`". No permanent back-compat alias is kept.
+
 ## 1. Objective
 
 One internal interface for all model access so that **provider, model, and per-call
@@ -13,10 +38,14 @@ parameters are config, not code**. After Phase 0:
 
 - Exactly one module imports an LLM SDK; every agent calls the seam.
 - Switching `LLM_PROVIDER` (groq → openai → vllm) is a `.env` change with no code edits.
-- The production target (self-hosted **vLLM**, OpenAI-compatible) is reached by the same
-  client path used for OpenAI — only base URL + model + key differ.
-- Behavior of the existing Groq dev path is **unchanged** (same models, same
-  temperatures) — important because graded output must not drift.
+- The production target (self-hosted **vLLM**, OpenAI-compatible) is reached by the **same
+  `ChatOpenAI` client path** used for dev (Groq) and OpenAI — only base URL + model + key
+  differ. The prod path is therefore exercised continuously in development.
+- Behavior of the Groq dev path is **functionally equivalent** (same model, same
+  temperatures, same OpenAI wire protocol) — the client library moves from the `groq` SDK to
+  the `openai` SDK against Groq's OpenAI-compatible endpoint, which makes no observable
+  difference to our call patterns (see §0). Graded output must not drift, so temperatures and
+  models are reproduced exactly.
 
 ## 2. The seam
 
@@ -60,26 +89,27 @@ async def stream(
   budget). Phase 0 leaves a clear seam for them but does **not** implement them (no phase
   collapsing).
 
-## 3. The client(s) introduced
+## 3. The client (single `ChatOpenAI` path)
 
-A small internal provider resolver inside `llm.py` maps `LLM_PROVIDER` → a LangChain chat
-client. Clients are cached by `(provider, model, temperature, max_tokens)`.
+One client class — `ChatOpenAI` (`langchain-openai`) — serves all three providers. The
+provider only selects a **base URL** (and how the API key is resolved); see §0 for why a
+single client is correct and preferred.
 
-| `LLM_PROVIDER` | Client class | Source pkg | Base URL | Notes |
-|---|---|---|---|---|
-| `groq` (dev default) | `ChatGroq` | `langchain-groq` (already present) | n/a | Keeps today's behavior byte-for-byte |
-| `openai` | `ChatOpenAI` | `langchain-openai` (**to add**) | default OpenAI | The OpenAI-compatible path |
-| `vllm` (prod) | `ChatOpenAI` | `langchain-openai` (**to add**) | `LLM_BASE_URL` (university vLLM) | Same class as `openai`; only URL/model/key differ |
+| `LLM_PROVIDER` | Client class | Base URL | API key source |
+|---|---|---|---|
+| `groq` (dev default) | `ChatOpenAI` | `https://api.groq.com/openai/v1` (default) | `llm_api_key` or existing `groq_api_key` |
+| `openai` | `ChatOpenAI` | SDK default (`api.openai.com`) | `llm_api_key` |
+| `vllm` (prod) | `ChatOpenAI` | `llm_base_url` (university vLLM) | `llm_api_key` or `"EMPTY"` |
 
-**Why keep `ChatGroq` rather than point `ChatOpenAI` at Groq's OpenAI-compatible endpoint:**
-lowest risk — the existing dev path is unchanged, satisfying the "don't rewrite working
-code" principle. Because Groq *also* exposes an OpenAI-compatible endpoint, we can later
-collapse `groq` onto `ChatOpenAI` if we want a single client class; that simplification is
-optional and explicitly **not** part of Phase 0.
-
-`langchain-openai` is the only new runtime dependency the seam needs (`openai` comes in
-transitively). It is **not imported until** `LLM_PROVIDER` is `openai`/`vllm` (lazy import
-inside the resolver), so dev installs that only use Groq still work.
+- `llm_base_url` always overrides the per-provider default when set (e.g. a self-hosted
+  Groq-compatible proxy), so the table values are defaults, not hardcodes.
+- `langchain-openai` is the one new runtime dependency; **`langchain-groq` is removed**.
+  `openai` arrives transitively. The SDK is **lazy-imported inside the seam** (not at module
+  load) so importing `app.core.llm` — and therefore every agent — stays cheap and does not
+  drag the SDK into import-time.
+- Client construction is per-call (matching the pre-seam code, which built a new client each
+  call); connection reuse/pooling is deferred to Phase 2, where the seam already centralizes
+  it.
 
 ## 4. Configuration model (`config.py`)
 
@@ -91,11 +121,16 @@ module-level `settings = get_settings()` still imports without new required env)
 | `llm_provider` | `"groq"` | Selects the client. groq \| openai \| vllm |
 | `llm_model` | `"llama-3.1-8b-instant"` | The single model knob (replaces per-agent `groq_model` reads) |
 | `llm_router_model` | `"llama-3.1-8b-instant"` | Preserves the orchestrator's pinned fast routing model |
-| `llm_base_url` | `None` | Required when provider is `vllm` (validated lazily in the seam, not at import) |
-| `llm_api_key` | `None` | Key for `openai`/`vllm`; `groq` continues to use existing `groq_api_key` |
+| `llm_base_url` | `None` | Overrides the per-provider base URL; **required when provider is `vllm`** |
+| `llm_api_key` | `None` | Key for `openai`/`vllm`; `groq` falls back to existing `groq_api_key` |
 
-- `groq_model` is kept as a back-compat alias of `llm_model` for this phase so nothing
-  breaks; the agents stop reading it directly.
+- **`groq_model` is removed** (no alias). `llm_model` is the single source of truth; the two
+  `settings.groq_model` reads in `main.py` move to `settings.llm_model`, and README +
+  `.env.example` use `LLM_MODEL`.
+- **`groq_api_key` becomes optional** (was required) so prod (vLLM, no Groq key) can start. A
+  `model_validator` on `Settings` enforces provider-appropriate config **at startup**
+  (fail-fast): `groq` needs a key (`llm_api_key` or `groq_api_key`), `openai` needs
+  `llm_api_key`, `vllm` needs `llm_base_url`, and any unknown provider is rejected.
 - **Temperature centralization** lives in the seam as a `call_type → params` table that
   reproduces the current temperatures exactly (no behavior drift):
 
@@ -138,6 +173,10 @@ gains `from app.core import llm`. The LangGraph graphs are built once and cached
 LLM is constructed **inside node functions at call time** (not at graph-build), so swapping
 to the seam needs no graph rebuild — that interaction is a Phase 1 concern, untouched here.
 
+One **non-agent** edit beyond the call sites: `main.py:15` and `main.py:42` read
+`settings.groq_model` (startup banner + `/health` `"model"` field) and move to
+`settings.llm_model` when the field is renamed.
+
 Streaming note: `stream_code_agent` / `stream_rag_agent` already "fake-stream" (run to
 completion, then yield word-by-word); they call `run_*` which now route through the seam, so
 no extra change is needed. Only `stream_theory_agent` uses real token streaming and moves to
@@ -146,9 +185,13 @@ no extra change is needed. Only `stream_theory_agent` uses real token streaming 
 ## 6. Dependency changes
 
 - **Add:** `langchain-openai` (runtime). `openai` arrives transitively.
+- **Remove:** `langchain-groq` (no longer used — Groq is reached via `ChatOpenAI`).
 - **Declare explicitly (already transitive):** `pydantic-settings`.
-- **Keep:** `langchain-groq` (groq provider).
-- No removals. `langgraph-checkpoint-sqlite` stays declared-but-unused until Phase 1.
+- `uv lock` + `uv sync` regenerate `uv.lock` and the venv to match. If the lock/sync cannot
+  run (offline), the source change still stands and the isolation + provider-logic + agent
+  smoke tests pass without `langchain-openai` installed (see §8); only the real-client
+  construction test is skipped until the dep is present.
+- `langgraph-checkpoint-sqlite` stays declared-but-unused until Phase 1.
 
 ## 7. Out of scope (phase boundaries)
 
@@ -171,9 +214,11 @@ phases extend.
    (`langchain_groq`, `langchain_openai`, `openai`, `groq`). This is the brief's
    "grep the codebase: zero direct LLM-SDK imports outside `llm.py`" encoded as a test.
 2. **Provider-switch test** (`tests/test_llm_provider_switch.py`): with settings monkeypatched
-   to `groq` vs `openai`/`vllm`, assert the seam builds the expected client class and base
-   URL and that `chat`/`stream` return the normalized types — **with no other code edited**.
-   No real network: the provider client is stubbed.
+   to `groq` / `openai` / `vllm`, assert the seam resolves the expected base URL and API key
+   for each provider (pure functions — no SDK import, always runs), and that an unknown
+   provider / missing vLLM base URL fails fast in the validator. A second, `importorskip`-
+   guarded case stubs `ChatOpenAI` to capture constructor kwargs and confirms the right
+   base_url/model/key are passed — **with no other code edited**. No real network.
 3. **Agent smoke test** (`tests/test_agents_smoke.py`): monkeypatch the seam to return canned
    output and drive `run_theory_agent`, `orchestrator.route` (still parses JSON), and
    `exam_agent.grade_answer` (still returns the score dict) — proving agents still function
@@ -181,31 +226,37 @@ phases extend.
 4. **Manual integration checklist** (needs a real `GROQ_API_KEY`, documented in the PR):
    - `LLM_PROVIDER=groq`: `/api/stream` (guided + practice), `/api/lesson/*`, and
      `/api/exam/start` + `/api/exam/answer` all return sensible responses.
-   - Flip `LLM_PROVIDER` (e.g. to an OpenAI-compatible endpoint) and confirm the app runs
-     with **only** the `.env` changed — no code edits — demonstrating the config-only swap
-     that the vLLM hand-off depends on.
+   - Flip `LLM_PROVIDER` to `openai` (or a vLLM endpoint) and confirm the app runs with
+     **only** the `.env` changed — no code edits — demonstrating the config-only swap that
+     the vLLM hand-off depends on. Because dev itself uses `ChatOpenAI` against Groq, this is
+     the *same* client path, only base URL + model + key differ.
 
 ## 9. Risks & mitigations
 
-- **Graded-output drift.** Mitigated by reproducing exact temperatures/models (table in §4)
-  and keeping `ChatGroq` for the groq path.
+- **Graded-output drift.** Mitigated by reproducing exact temperatures/models (table in §4);
+  the provider wire protocol (OpenAI chat-completions) is unchanged from today's Groq calls.
 - **Orchestrator's pinned fast model.** Preserved via `llm_router_model`; not folded into
   `llm_model`.
-- **Import-time failure.** All new settings are optional with defaults; `vllm` base-URL
-  requirement is validated lazily in the seam, so `settings = get_settings()` still imports.
-- **Groq vs vLLM message parity.** Avoided for dev by keeping `ChatGroq`; the
-  `ChatOpenAI`→vLLM path is validated in the manual checklist before prod hand-off.
+- **Import-time failure.** All new settings are optional with defaults; provider-specific
+  requirements (groq key / openai key / vllm base URL) are enforced by a `model_validator` at
+  startup, which is the intended fail-fast — not an unexpected break.
+- **Reliance on Groq's OpenAI-compatible endpoint.** This is Groq's own recommended path for
+  OpenAI-SDK clients and is exercised continuously as the dev default, so any incompatibility
+  surfaces immediately in development rather than at prod hand-off.
 
 ## 10. Proposed commit sequence (on approval)
 
-Per the project rule — one logical commit per step, clear message, local only, no push:
+Per the project rule — one logical commit per step, clear message, local only, no push.
+Each commit leaves the app runnable on Groq:
 
 1. `feat: add LLM seam (core/llm.py) with provider/model/temperature config` — adds
-   `core/llm.py`, the new `config.py` settings, `langchain-openai` + `pydantic-settings` in
-   `pyproject.toml`, and `backend/.env.example`. No agent edits yet; app still runs on Groq.
+   `core/llm.py`, the new `config.py` settings + validator, `langchain-openai` (and
+   `pydantic-settings`) in `pyproject.toml` with `uv` lock/sync, and `backend/.env.example`.
+   `groq_model` is still present and agents still use it, so the app is unchanged and green.
 2. `refactor: route all agents through the LLM seam` — edits the six agent modules
-   (orchestrator, theory, code, rag, lesson, exam); removes every `langchain_groq` import.
+   (orchestrator, theory, code, rag, lesson, exam), removes every `langchain_groq` import,
+   drops the `groq_model` field, and repoints `main.py` + README to `llm_model`.
 3. `test: prove single LLM seam (isolation, provider switch, agent smoke)` — adds
    `backend/tests/` + `conftest.py` and the three proof-of-done tests.
 
-Awaiting approval before writing any code.
+Proceeding to code on this plan.
