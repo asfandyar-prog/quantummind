@@ -81,9 +81,10 @@ class Settings(BaseSettings):
         # backend/.env correctly.
         env_file = ".env"
         env_file_encoding = "utf-8"
-        extra = "ignore"
-        # Ignore unknown keys in .env (e.g. a leftover GROQ_MODEL after the
-        # rename to LLM_MODEL) instead of failing to start.
+        extra = "forbid"
+        # Strict: an unknown/misspelled key in .env crashes at startup rather
+        # than silently falling back to a default. Keep .env keys in sync with
+        # the fields above (e.g. use LLM_MODEL, not the old GROQ_MODEL).
         # Always specify encoding — prevents issues on Windows
         # where the default encoding can vary.
 
