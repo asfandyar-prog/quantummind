@@ -57,6 +57,15 @@ class Settings(BaseSettings):
     teacher_password: str = "quantum2026"
     # Password for teacher mode. Change this in production!
 
+    # ── Database & cache (Phase 1) ────────────────────────────
+    # Single connection string — only this changes for managed vs self-hosted.
+    # Uses psycopg 3 (postgresql+psycopg://) as the one Postgres driver everywhere.
+    database_url: str = "postgresql+psycopg://quantummind:quantummind@localhost:5432/quantummind"
+    redis_url: str = "redis://localhost:6379/0"   # shared active-exam state
+    db_pool_size: int = 10                          # async engine pool size
+    db_max_overflow: int = 5                        # pool overflow ceiling
+    exam_state_ttl_seconds: int = 86400             # Redis safety TTL (Postgres is source of truth)
+
     @model_validator(mode="after")
     def _validate_provider(self):
         """Fail fast at startup if the selected provider is misconfigured."""

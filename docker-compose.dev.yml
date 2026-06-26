@@ -1,0 +1,41 @@
+# Dev-only infrastructure for Phase 1 (durable & shared state).
+# Brings up local Postgres + Redis matching the default DATABASE_URL / REDIS_URL.
+# This is NOT the production deployment — the prod vLLM/sandbox images come later.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml down        (add -v to wipe data)
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: quantummind-postgres
+    environment:
+      POSTGRES_USER: quantummind
+      POSTGRES_PASSWORD: quantummind
+      POSTGRES_DB: quantummind
+    ports:
+      - "5432:5432"
+    volumes:
+      - quantummind_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantummind -d quantummind"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: quantummind-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - quantummind_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  quantummind_pgdata:
+  quantummind_redisdata:
