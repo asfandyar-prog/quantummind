@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     llm_base_url: Optional[str] = None               # overrides per-provider default; required for vllm
     llm_api_key: Optional[str] = None                # key for openai/vllm; groq falls back to groq_api_key
 
+    # ── LLM resilience (Phase 2) ──────────────────────────────
+    llm_timeout_seconds: float = 30.0   # per-call timeout (client + asyncio backstop)
+    llm_max_attempts: int = 4           # retry ceiling, including the first attempt
+    llm_retry_base_delay: float = 0.5   # exponential backoff base (seconds)
+    llm_retry_max_delay: float = 8.0    # backoff cap (seconds)
+
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
     # "development" enables detailed error messages and auto-reload.
