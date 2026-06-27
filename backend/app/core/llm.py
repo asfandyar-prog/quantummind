@@ -9,7 +9,11 @@
 # only base URL + model + key differ by config.
 
 import asyncio
+import json
+import logging
 import random
+import time
+from datetime import datetime, timezone
 from typing import AsyncIterator, Optional
 
 from langchain_core.messages import BaseMessage
@@ -22,6 +26,11 @@ from tenacity import (
 )
 
 from app.core.config import settings
+
+logger = logging.getLogger("quantummind.llm")
+
+# Strong refs to fire-and-forget accounting tasks so they aren't GC'd mid-flight.
+_accounting_tasks: set = set()
 
 
 # ── Typed seam errors ─────────────────────────────────────────
@@ -161,6 +170,58 @@ async def _run_resilient(make_coro, *, timeout: float):
         raise
 
 
+# ── Token / cost accounting (best-effort, off the response path) ──────────────
+
+async def _bump_counters(total_tokens: int) -> None:
+    """Increment shared daily token + call counters in Redis; warn over soft budget."""
+    from app.db.redis_client import get_redis
+
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    r = get_redis()
+    daily = await r.incrby(f"llm:tokens:total:{day}", total_tokens)
+    await r.incr(f"llm:calls:{day}")
+
+    budget = settings.llm_token_budget_per_day
+    if budget and daily > budget:
+        # Soft budget: warn only — never refuse a call (a live exam must not break
+        # on a counter).
+        logger.warning(json.dumps({
+            "event": "llm_budget_exceeded", "date": day,
+            "daily_tokens": daily, "budget": budget,
+        }))
+
+
+async def _account(call_type, model, message, latency_ms: int, outcome: str) -> None:
+    """Log one structured per-request record + bump counters. Never raises —
+    accounting must not break (or slow) an LLM call."""
+    try:
+        usage = (getattr(message, "usage_metadata", None) or {}) if message is not None else {}
+        in_tok = int(usage.get("input_tokens", 0) or 0)
+        out_tok = int(usage.get("output_tokens", 0) or 0)
+        total = int(usage.get("total_tokens", in_tok + out_tok) or 0)
+        logger.info(json.dumps({
+            "event": "llm_call",
+            "call_type": call_type,
+            "model": model,
+            "provider": settings.llm_provider,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "total_tokens": total,
+            "latency_ms": latency_ms,
+            "outcome": outcome,
+        }))
+        await _bump_counters(total)
+    except Exception as exc:  # accounting is best-effort
+        logger.warning("llm accounting failed: %s", exc)
+
+
+def _schedule_accounting(coro) -> None:
+    """Run accounting as a tracked background task so it never blocks the response."""
+    task = asyncio.create_task(coro)
+    _accounting_tasks.add(task)
+    task.add_done_callback(_accounting_tasks.discard)
+
+
 async def chat(
     messages: list[BaseMessage],
     *,
@@ -169,12 +230,25 @@ async def chat(
     max_tokens: Optional[int] = None,
     model: Optional[str] = None,
 ) -> str:
-    """Run one completion and return the response text (timed out + retried)."""
+    """Run one completion and return the response text (timed out + retried).
+
+    Usage is captured from the returned AIMessage and accounted off the response
+    path; the return type stays `str`, so agents are untouched.
+    """
     model_name, temp = _resolve_params(call_type, temperature, model)
     timeout = _resolve_timeout(call_type)
     client = _build_client(model_name, temp, max_tokens, timeout=timeout)
-    chain = client | StrOutputParser()
-    return await _run_resilient(lambda: chain.ainvoke(messages), timeout=timeout)
+
+    start = time.monotonic()
+    try:
+        message = await _run_resilient(lambda: client.ainvoke(messages), timeout=timeout)
+    except LLMUnavailable:
+        _schedule_accounting(_account(call_type, model_name, None,
+                                      int((time.monotonic() - start) * 1000), "unavailable"))
+        raise
+    _schedule_accounting(_account(call_type, model_name, message,
+                                  int((time.monotonic() - start) * 1000), "ok"))
+    return StrOutputParser().invoke(message)
 
 
 async def stream(

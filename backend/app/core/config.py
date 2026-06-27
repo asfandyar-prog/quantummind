@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     llm_max_attempts: int = 4           # retry ceiling, including the first attempt
     llm_retry_base_delay: float = 0.5   # exponential backoff base (seconds)
     llm_retry_max_delay: float = 8.0    # backoff cap (seconds)
+    llm_token_budget_per_day: int = 0   # soft daily token budget (0 = unlimited; warn-only)
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
