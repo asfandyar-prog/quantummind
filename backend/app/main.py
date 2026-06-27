@@ -25,12 +25,18 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("SELECT 1"))
     print("[DB] Postgres async pool ready")
 
+    # Warm the shared Redis active-exam store and fail fast if unreachable.
+    from app.db.redis_client import get_redis, close_redis
+    await get_redis().ping()
+    print("[Redis] active-exam store ready")
+
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
     print(f"   Model       : {settings.llm_model}")
     print(f"   Frontend URL: {settings.frontend_url}")
     print(f"   Docs        : http://localhost:8000/docs\n")
     yield
+    await close_redis()
     await dispose_engine()
     print("\n👋 QuantumMind backend shutting down...")
 

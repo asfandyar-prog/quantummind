@@ -4,13 +4,14 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from app.agents.exam_agent import generate_question, grade_answer, decide_followup, identify_weak_areas
-from app.db.audit_db import create_session, end_session, log_turn, log_teacher_review, get_all_sessions, get_session_turns, get_research_stats
+from app.agents.exam_agent import generate_question, grade_answer, decide_followup
+from app.db.audit_db import (
+    create_session, end_session, set_in_flight, advance_exam, complete_exam,
+    log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
+)
+from app.core.exam_state import save_active, load_active, clear_active
 
 router = APIRouter()
-
-# In-memory exam state per session
-_exam_state: dict = {}
 
 
 def verify_teacher(password: Optional[str]) -> bool:
@@ -40,13 +41,25 @@ async def start_exam(req: StartRequest):
         turn_number=1, previous_qa=[], is_followup=False,
     )
 
-    _exam_state[session_id] = {
+    # Postgres FIRST: the in-flight question is durable before we respond, so a
+    # restart immediately after start still knows the current question.
+    await set_in_flight(
+        session_id,
+        current_question=question,
+        current_turn_number=1,
+        current_is_followup=False,
+        followup_count=0,
+    )
+
+    # THEN the Redis hot copy.
+    state = {
         "topic": req.topic, "version": req.version,
         "student_name": req.student_name,
         "turns": [], "turn_number": 1,
         "followup_count": 0, "weak_areas": [],
         "current_question": question, "total_score": 0.0,
     }
+    await save_active(session_id, state)
 
     print(f"[ExamRoute] Started: {session_id} | {req.student_name} | {req.topic} | {req.version}")
     return {"session_id": session_id, "question": question, "turn_number": 1, "version": req.version}
@@ -59,8 +72,8 @@ class AnswerRequest(BaseModel):
 
 @router.post("/exam/answer")
 async def submit_answer(req: AnswerRequest):
-    state = _exam_state.get(req.session_id)
-    if not state:
+    state = await load_active(req.session_id)
+    if state is None:
         raise HTTPException(404, "Session not found. Please start a new exam.")
 
     topic    = state["topic"]
@@ -68,19 +81,16 @@ async def submit_answer(req: AnswerRequest):
     question = state["current_question"]
     turn_num = state["turn_number"]
 
+    # Whether the question just answered was a follow-up (mirrors the old logic).
+    is_followup_for_turn = state["followup_count"] > 0
+
     # Grade — 1 LLM call
     grading = await grade_answer(topic, question, req.student_answer)
 
-    # Log to audit DB
-    turn_id = await log_turn(
-        session_id=req.session_id, turn_number=turn_num,
-        question=question, student_answer=req.student_answer,
-        score_accuracy=grading["accuracy"], score_reasoning=grading["reasoning"],
-        score_clarity=grading["clarity"], ai_justification=grading["justification"],
-        ideal_answer=grading["ideal_answer"], is_followup=state["followup_count"] > 0,
-    )
-
-    state["turns"].append({"question": question, "answer": req.student_answer, "score": grading["total"], "turn_id": turn_id})
+    # Update the working state. The turn is appended now so it feeds the next
+    # question's context (previous_qa uses question/answer/score, not turn_id).
+    new_turn = {"question": question, "answer": req.student_answer, "score": grading["total"], "turn_id": None}
+    state["turns"].append(new_turn)
     state["total_score"] += grading["total"]
     for area in grading["weak_areas"]:
         if area not in state["weak_areas"]:
@@ -103,29 +113,69 @@ async def submit_answer(req: AnswerRequest):
     max_q = 5 if version == "V1" else 10
 
     if followup["should_followup"]:
+        is_followup = True
+        next_turn_number    = turn_num + 1
+        next_followup_count = state["followup_count"] + 1
         next_question = await generate_question(
-            topic=topic, version=version, turn_number=turn_num + 1,
+            topic=topic, version=version, turn_number=next_turn_number,
             previous_qa=state["turns"], weak_areas=grading["weak_areas"], is_followup=True,
         )
-        state["followup_count"] += 1
-        is_followup = True
-        state["turn_number"] += 1
+        # Postgres FIRST: completed turn + next in-flight question, one transaction.
+        turn_id = await advance_exam(
+            session_id=req.session_id, turn_number=turn_num,
+            question=question, student_answer=req.student_answer,
+            score_accuracy=grading["accuracy"], score_reasoning=grading["reasoning"],
+            score_clarity=grading["clarity"], ai_justification=grading["justification"],
+            ideal_answer=grading["ideal_answer"], is_followup=is_followup_for_turn,
+            next_question=next_question, next_turn_number=next_turn_number,
+            next_is_followup=True, next_followup_count=next_followup_count,
+        )
+        # THEN the Redis hot copy.
+        new_turn["turn_id"]       = turn_id
+        state["followup_count"]   = next_followup_count
+        state["turn_number"]      = next_turn_number
         state["current_question"] = next_question
+        await save_active(req.session_id, state)
 
     elif len(state["turns"]) < max_q:
-        state["followup_count"] = 0
+        next_turn_number    = turn_num + 1
+        next_followup_count = 0
         next_question = await generate_question(
-            topic=topic, version=version, turn_number=turn_num + 1,
+            topic=topic, version=version, turn_number=next_turn_number,
             previous_qa=state["turns"], weak_areas=state["weak_areas"], is_followup=False,
         )
-        state["turn_number"] += 1
+        # Postgres FIRST: completed turn + next in-flight question, one transaction.
+        turn_id = await advance_exam(
+            session_id=req.session_id, turn_number=turn_num,
+            question=question, student_answer=req.student_answer,
+            score_accuracy=grading["accuracy"], score_reasoning=grading["reasoning"],
+            score_clarity=grading["clarity"], ai_justification=grading["justification"],
+            ideal_answer=grading["ideal_answer"], is_followup=is_followup_for_turn,
+            next_question=next_question, next_turn_number=next_turn_number,
+            next_is_followup=False, next_followup_count=0,
+        )
+        # THEN the Redis hot copy.
+        new_turn["turn_id"]       = turn_id
+        state["followup_count"]   = next_followup_count
+        state["turn_number"]      = next_turn_number
         state["current_question"] = next_question
+        await save_active(req.session_id, state)
 
     else:
         exam_complete = True
         avg = round(state["total_score"] / len(state["turns"]), 2)
-        await end_session(req.session_id, avg, len(state["turns"]))
-        del _exam_state[req.session_id]
+        # Postgres FIRST: final turn + mark completed, one transaction.
+        turn_id = await complete_exam(
+            session_id=req.session_id, turn_number=turn_num,
+            question=question, student_answer=req.student_answer,
+            score_accuracy=grading["accuracy"], score_reasoning=grading["reasoning"],
+            score_clarity=grading["clarity"], ai_justification=grading["justification"],
+            ideal_answer=grading["ideal_answer"], is_followup=is_followup_for_turn,
+            avg_score=avg, total_turns=len(state["turns"]),
+        )
+        new_turn["turn_id"] = turn_id
+        # THEN drop the Redis hot copy.
+        await clear_active(req.session_id)
 
     return {
         "turn_id": turn_id,
@@ -143,13 +193,13 @@ async def submit_answer(req: AnswerRequest):
 @router.post("/exam/end")
 async def end_exam_early(req: dict):
     session_id = req.get("session_id")
-    state = _exam_state.get(session_id)
-    if not state:
+    state = await load_active(session_id)
+    if state is None:
         raise HTTPException(404, "Session not found.")
     total = len(state["turns"])
     avg   = round(state["total_score"] / total, 2) if total > 0 else 0.0
-    await end_session(session_id, avg, total)
-    del _exam_state[session_id]
+    await end_session(session_id, avg, total)   # Postgres FIRST
+    await clear_active(session_id)               # THEN drop Redis
     return {"status": "ended", "avg_score": avg, "total_turns": total}
 
 

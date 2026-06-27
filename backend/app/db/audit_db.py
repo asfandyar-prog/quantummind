@@ -72,10 +72,10 @@ async def end_session(session_id: str, avg_score: float, total_turns: int) -> No
 
 
 # ════════════════════════════════════════════════════════════════
-# TURN OPERATIONS
+# TURN OPERATIONS — one transaction: completed turn + in-flight/completion
 # ════════════════════════════════════════════════════════════════
 
-async def log_turn(
+def _make_turn(
     session_id:       str,
     turn_number:      int,
     question:         str,
@@ -85,30 +85,126 @@ async def log_turn(
     score_clarity:    float,
     ai_justification: str,
     ideal_answer:     str,
-    is_followup:      bool = False,
-) -> str:
-    """Log a completed Q&A turn. Returns turn_id."""
-    turn_id = str(uuid.uuid4())
+    is_followup:      bool,
+) -> ExamTurn:
     score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    return ExamTurn(
+        turn_id=str(uuid.uuid4()),
+        session_id=session_id,
+        turn_number=turn_number,
+        question=question,
+        student_answer=student_answer,
+        score_accuracy=score_accuracy,
+        score_reasoning=score_reasoning,
+        score_clarity=score_clarity,
+        score_total=score_total,
+        ai_justification=ai_justification,
+        ideal_answer=ideal_answer,
+        is_followup=bool(is_followup),
+        answered_at=_now(),
+    )
+
+
+async def set_in_flight(
+    session_id:          str,
+    current_question:    str,
+    current_turn_number: int,
+    current_is_followup: bool,
+    followup_count:      int,
+) -> None:
+    """Persist the in-flight question on the session (durable; survives restart)."""
     async with get_sessionmaker()() as session:
-        session.add(ExamTurn(
-            turn_id=turn_id,
-            session_id=session_id,
-            turn_number=turn_number,
-            question=question,
-            student_answer=student_answer,
-            score_accuracy=score_accuracy,
-            score_reasoning=score_reasoning,
-            score_clarity=score_clarity,
-            score_total=score_total,
-            ai_justification=ai_justification,
-            ideal_answer=ideal_answer,
-            is_followup=bool(is_followup),
-            answered_at=_now(),
-        ))
+        await session.execute(
+            update(ExamSession)
+            .where(ExamSession.session_id == session_id)
+            .values(
+                current_question=current_question,
+                current_turn_number=current_turn_number,
+                current_is_followup=bool(current_is_followup),
+                followup_count=followup_count,
+            )
+        )
         await session.commit()
-    print(f"[AuditDB] Turn logged: {turn_id} | score={score_total}")
-    return turn_id
+    print(f"[AuditDB] In-flight set: {session_id} | turn={current_turn_number}")
+
+
+async def advance_exam(
+    *,
+    session_id:          str,
+    turn_number:         int,
+    question:            str,
+    student_answer:      str,
+    score_accuracy:      float,
+    score_reasoning:     float,
+    score_clarity:       float,
+    ai_justification:    str,
+    ideal_answer:        str,
+    is_followup:         bool,
+    next_question:       str,
+    next_turn_number:    int,
+    next_is_followup:    bool,
+    next_followup_count: int,
+) -> str:
+    """ONE transaction: persist the completed turn AND set the next in-flight question."""
+    turn = _make_turn(
+        session_id, turn_number, question, student_answer,
+        score_accuracy, score_reasoning, score_clarity,
+        ai_justification, ideal_answer, is_followup,
+    )
+    async with get_sessionmaker()() as session:
+        session.add(turn)
+        await session.execute(
+            update(ExamSession)
+            .where(ExamSession.session_id == session_id)
+            .values(
+                current_question=next_question,
+                current_turn_number=next_turn_number,
+                current_is_followup=bool(next_is_followup),
+                followup_count=next_followup_count,
+            )
+        )
+        await session.commit()
+    print(f"[AuditDB] Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
+    return turn.turn_id
+
+
+async def complete_exam(
+    *,
+    session_id:       str,
+    turn_number:      int,
+    question:         str,
+    student_answer:   str,
+    score_accuracy:   float,
+    score_reasoning:  float,
+    score_clarity:    float,
+    ai_justification: str,
+    ideal_answer:     str,
+    is_followup:      bool,
+    avg_score:        float,
+    total_turns:      int,
+) -> str:
+    """ONE transaction: persist the final turn AND mark the session completed."""
+    turn = _make_turn(
+        session_id, turn_number, question, student_answer,
+        score_accuracy, score_reasoning, score_clarity,
+        ai_justification, ideal_answer, is_followup,
+    )
+    async with get_sessionmaker()() as session:
+        session.add(turn)
+        await session.execute(
+            update(ExamSession)
+            .where(ExamSession.session_id == session_id)
+            .values(
+                ended_at=_now(),
+                total_turns=total_turns,
+                avg_score=avg_score,
+                status="completed",
+                current_question=None,
+            )
+        )
+        await session.commit()
+    print(f"[AuditDB] Turn logged + completed: {turn.turn_id} | avg={avg_score}")
+    return turn.turn_id
 
 
 # ════════════════════════════════════════════════════════════════
@@ -171,6 +267,27 @@ async def log_teacher_review(
 # ════════════════════════════════════════════════════════════════
 # QUERY OPERATIONS — for teacher dashboard and research
 # ════════════════════════════════════════════════════════════════
+
+async def get_session_row(session_id: str) -> Optional[dict]:
+    """The session row incl. in-flight columns — used to reconstruct active state."""
+    async with get_sessionmaker()() as session:
+        s = (await session.execute(
+            select(ExamSession).where(ExamSession.session_id == session_id)
+        )).scalar_one_or_none()
+    if s is None:
+        return None
+    return {
+        "session_id":          s.session_id,
+        "student_name":        s.student_name,
+        "topic":               s.topic,
+        "version":             s.version,
+        "status":              s.status,
+        "current_question":    s.current_question,
+        "current_turn_number": s.current_turn_number,
+        "current_is_followup": s.current_is_followup,
+        "followup_count":      s.followup_count,
+    }
+
 
 async def get_all_sessions(limit: int = 50) -> list[dict]:
     """Get recent exam sessions for the teacher dashboard."""
