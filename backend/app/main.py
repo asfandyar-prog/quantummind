@@ -1,6 +1,16 @@
+import sys
+import asyncio
+
+# psycopg 3's async driver cannot run on Windows' default ProactorEventLoop; it
+# needs a SelectorEventLoop. Set the policy before any event loop is created
+# (Windows dev only — Linux/prod use epoll and are unaffected).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 from app.core.config import settings
 
 
@@ -8,14 +18,20 @@ from app.core.config import settings
 async def lifespan(app: FastAPI):
     from app.core.memory import init_checkpointer
     await init_checkpointer()
-    from app.db.audit_db import init_db
-    init_db()
+
+    # Warm the async Postgres pool and fail fast if the DB is unreachable.
+    from app.db.database import get_engine, dispose_engine
+    async with get_engine().connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    print("[DB] Postgres async pool ready")
+
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
     print(f"   Model       : {settings.llm_model}")
     print(f"   Frontend URL: {settings.frontend_url}")
     print(f"   Docs        : http://localhost:8000/docs\n")
     yield
+    await dispose_engine()
     print("\n👋 QuantumMind backend shutting down...")
 
 

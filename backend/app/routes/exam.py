@@ -33,7 +33,7 @@ async def start_exam(req: StartRequest):
     if req.version not in ("V1", "V2", "V3"):
         raise HTTPException(400, "version must be V1, V2, or V3")
 
-    session_id = create_session(req.student_name, req.topic, req.version)
+    session_id = await create_session(req.student_name, req.topic, req.version)
 
     question = await generate_question(
         topic=req.topic, version=req.version,
@@ -72,7 +72,7 @@ async def submit_answer(req: AnswerRequest):
     grading = await grade_answer(topic, question, req.student_answer)
 
     # Log to audit DB
-    turn_id = log_turn(
+    turn_id = await log_turn(
         session_id=req.session_id, turn_number=turn_num,
         question=question, student_answer=req.student_answer,
         score_accuracy=grading["accuracy"], score_reasoning=grading["reasoning"],
@@ -124,7 +124,7 @@ async def submit_answer(req: AnswerRequest):
     else:
         exam_complete = True
         avg = round(state["total_score"] / len(state["turns"]), 2)
-        end_session(req.session_id, avg, len(state["turns"]))
+        await end_session(req.session_id, avg, len(state["turns"]))
         del _exam_state[req.session_id]
 
     return {
@@ -148,14 +148,14 @@ async def end_exam_early(req: dict):
         raise HTTPException(404, "Session not found.")
     total = len(state["turns"])
     avg   = round(state["total_score"] / total, 2) if total > 0 else 0.0
-    end_session(session_id, avg, total)
+    await end_session(session_id, avg, total)
     del _exam_state[session_id]
     return {"status": "ended", "avg_score": avg, "total_turns": total}
 
 
 @router.get("/exam/session/{session_id}")
 async def get_session(session_id: str):
-    turns = get_session_turns(session_id)
+    turns = await get_session_turns(session_id)
     return {"session_id": session_id, "turns": turns}
 
 
@@ -167,14 +167,14 @@ async def get_session(session_id: str):
 async def teacher_sessions(x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    return {"sessions": get_all_sessions(100)}
+    return {"sessions": await get_all_sessions(100)}
 
 
 @router.get("/teacher/session/{session_id}")
 async def teacher_session(session_id: str, x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    return {"session_id": session_id, "turns": get_session_turns(session_id)}
+    return {"session_id": session_id, "turns": await get_session_turns(session_id)}
 
 
 class ReviewRequest(BaseModel):
@@ -195,7 +195,7 @@ class ReviewRequest(BaseModel):
 async def teacher_review(req: ReviewRequest, x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    review_id = log_teacher_review(
+    review_id = await log_teacher_review(
         session_id=req.session_id, turn_id=req.turn_id,
         ai_accuracy=req.ai_accuracy, ai_reasoning=req.ai_reasoning, ai_clarity=req.ai_clarity,
         teacher_accuracy=req.teacher_accuracy, teacher_reasoning=req.teacher_reasoning, teacher_clarity=req.teacher_clarity,
@@ -208,4 +208,4 @@ async def teacher_review(req: ReviewRequest, x_teacher_password: Optional[str] =
 async def research_stats(x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    return get_research_stats()
+    return await get_research_stats()
