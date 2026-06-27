@@ -16,7 +16,7 @@ from app.core.config import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.core.memory import init_checkpointer
+    from app.core.memory import init_checkpointer, close_checkpointer
     await init_checkpointer()
 
     # Warm the async Postgres pool and fail fast if the DB is unreachable.
@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI):
     yield
     await close_redis()
     await dispose_engine()
+    await close_checkpointer()
     print("\n👋 QuantumMind backend shutting down...")
 
 

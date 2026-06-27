@@ -5,6 +5,7 @@ import asyncio
 
 import pytest
 
+from langgraph.checkpoint.memory import MemorySaver
 import app.core.llm as llm_mod
 from app.core import memory
 from app.agents import orchestrator, theory_agent, exam_agent
@@ -28,7 +29,9 @@ def test_orchestrator_route_falls_back_on_bad_json(monkeypatch):
 
 def test_theory_agent_returns_string(monkeypatch):
     _patch_chat(monkeypatch, "**Superposition** is a core quantum idea.")
-    asyncio.run(memory.init_checkpointer())  # theory graph uses a checkpointer
+    # Use an in-memory checkpointer so the test stays hermetic (no Postgres).
+    monkeypatch.setattr(memory, "_checkpointer", MemorySaver())
+    monkeypatch.setattr(theory_agent, "_graph", None)  # rebuild bound to it
     out = asyncio.run(theory_agent.run_theory_agent("what is superposition?", thread_id="t-smoke"))
     assert isinstance(out, str)
     assert "Superposition" in out
