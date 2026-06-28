@@ -83,6 +83,9 @@ class ExamTurn(Base):
     ideal_answer: Mapped[Optional[str]] = mapped_column(Text)
 
     is_followup: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # False = answer saved but grading owed (graceful degradation, Phase 2). The
+    # backfill worker grades pending turns and flips this true.
+    graded: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     session: Mapped["ExamSession"] = relationship(back_populates="turns")

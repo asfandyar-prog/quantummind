@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     llm_max_concurrency: int = 8             # global in-flight LLM calls (shared via Redis)
     llm_acquire_timeout_seconds: float = 20.0  # max wait for a slot before LLMBusy
     llm_limiter_stale_seconds: float = 180.0   # prune window: a dead worker's slot self-expires
+    grading_backfill_interval_seconds: float = 15.0  # backfill worker sweep cadence
+    grading_backfill_batch: int = 50                 # max stuck turns reconciled per sweep
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"

@@ -35,12 +35,19 @@ async def lifespan(app: FastAPI):
     print(f"[LLM] concurrency limit = {settings.llm_max_concurrency} "
           f"(acquire timeout {settings.llm_acquire_timeout_seconds}s)")
 
+    # Backfill worker: grades/advances any answers persisted while the LLM was
+    # down. Started after DB+Redis are up; stopped first on shutdown.
+    from app.core import grading_backfill
+    grading_backfill.start()
+    print("[Backfill] grading worker started")
+
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
     print(f"   Model       : {settings.llm_model}")
     print(f"   Frontend URL: {settings.frontend_url}")
     print(f"   Docs        : http://localhost:8000/docs\n")
     yield
+    await grading_backfill.stop()
     await close_redis()
     await dispose_engine()
     await close_checkpointer()

@@ -101,8 +101,179 @@ def _make_turn(
         ai_justification=ai_justification,
         ideal_answer=ideal_answer,
         is_followup=bool(is_followup),
+        graded=True,
         answered_at=_now(),
     )
+
+
+def _turn_to_dict(t: ExamTurn) -> dict:
+    return {
+        "turn_id":          t.turn_id,
+        "session_id":       t.session_id,
+        "turn_number":      t.turn_number,
+        "question":         t.question,
+        "student_answer":   t.student_answer,
+        "score_accuracy":   _f(t.score_accuracy),
+        "score_reasoning":  _f(t.score_reasoning),
+        "score_clarity":    _f(t.score_clarity),
+        "score_total":      _f(t.score_total),
+        "ai_justification": t.ai_justification,
+        "ideal_answer":     t.ideal_answer,
+        "is_followup":      int(t.is_followup),
+        "graded":           bool(t.graded),
+    }
+
+
+# ════════════════════════════════════════════════════════════════
+# GRACEFUL DEGRADATION — pending turns + idempotent reconciliation
+# ════════════════════════════════════════════════════════════════
+
+async def create_pending_turn(
+    session_id:     str,
+    turn_number:    int,
+    question:       str,
+    student_answer: str,
+    is_followup:    bool,
+) -> str:
+    """Persist a student's answer durably with graded=false (no scores yet, the
+    session is NOT advanced). This is the 'answer saved, grade owed' record."""
+    turn_id = str(uuid.uuid4())
+    async with get_sessionmaker()() as session:
+        session.add(ExamTurn(
+            turn_id=turn_id,
+            session_id=session_id,
+            turn_number=turn_number,
+            question=question,
+            student_answer=student_answer,
+            is_followup=bool(is_followup),
+            graded=False,
+            answered_at=_now(),
+        ))
+        await session.commit()
+    print(f"[AuditDB] Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
+    return turn_id
+
+
+async def finalize_grade(
+    turn_id:          str,
+    score_accuracy:   float,
+    score_reasoning:  float,
+    score_clarity:    float,
+    ai_justification: str,
+    ideal_answer:     str,
+) -> bool:
+    """Backfill a pending turn's grade. Idempotent: the conditional UPDATE only
+    affects a row that is still graded=false, so exactly one worker can claim it.
+    Returns True iff this call claimed (graded) the turn."""
+    score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    async with get_sessionmaker()() as session:
+        result = await session.execute(
+            update(ExamTurn)
+            .where(ExamTurn.turn_id == turn_id, ExamTurn.graded.is_(False))
+            .values(
+                score_accuracy=score_accuracy,
+                score_reasoning=score_reasoning,
+                score_clarity=score_clarity,
+                score_total=score_total,
+                ai_justification=ai_justification,
+                ideal_answer=ideal_answer,
+                graded=True,
+            )
+        )
+        await session.commit()
+    claimed = result.rowcount == 1
+    print(f"[AuditDB] finalize_grade {turn_id}: {'claimed' if claimed else 'already graded'}")
+    return claimed
+
+
+async def advance_in_flight_if(
+    session_id:          str,
+    expected_turn_number: int,
+    next_question:       str,
+    next_turn_number:    int,
+    next_is_followup:    bool,
+    next_followup_count: int,
+) -> bool:
+    """Advance the in-flight question ONLY if the session is still parked at
+    expected_turn_number (and active). Idempotent guard against double-advance."""
+    async with get_sessionmaker()() as session:
+        result = await session.execute(
+            update(ExamSession)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == expected_turn_number,
+                ExamSession.status == "active",
+            )
+            .values(
+                current_question=next_question,
+                current_turn_number=next_turn_number,
+                current_is_followup=bool(next_is_followup),
+                followup_count=next_followup_count,
+            )
+        )
+        await session.commit()
+    return result.rowcount == 1
+
+
+async def complete_if(
+    session_id:          str,
+    expected_turn_number: int,
+    avg_score:           float,
+    total_turns:         int,
+) -> bool:
+    """Mark the session completed ONLY if still parked at expected_turn_number
+    (and active). Idempotent guard against double-complete."""
+    async with get_sessionmaker()() as session:
+        result = await session.execute(
+            update(ExamSession)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == expected_turn_number,
+                ExamSession.status == "active",
+            )
+            .values(
+                ended_at=_now(),
+                total_turns=total_turns,
+                avg_score=avg_score,
+                status="completed",
+                current_question=None,
+            )
+        )
+        await session.commit()
+    return result.rowcount == 1
+
+
+async def get_pending_turn(session_id: str) -> Optional[dict]:
+    """The 'stuck' turn for one session: an answered turn the session hasn't moved
+    past (turn_number == current_turn_number, session active). It may be ungraded
+    or graded-but-not-yet-advanced. None if the session has no answer in flight."""
+    async with get_sessionmaker()() as session:
+        t = (await session.execute(
+            select(ExamTurn)
+            .join(ExamSession, ExamSession.session_id == ExamTurn.session_id)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.status == "active",
+                ExamTurn.turn_number == ExamSession.current_turn_number,
+            )
+        )).scalars().first()
+    return _turn_to_dict(t) if t is not None else None
+
+
+async def get_pending_turns(limit: int = 50) -> list[dict]:
+    """All stuck turns across active sessions (ungraded OR graded-but-not-advanced)
+    — the backfill worker's reconciliation set."""
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(ExamTurn)
+            .join(ExamSession, ExamSession.session_id == ExamTurn.session_id)
+            .where(
+                ExamSession.status == "active",
+                ExamTurn.turn_number == ExamSession.current_turn_number,
+            )
+            .limit(limit)
+        )).scalars().all()
+    return [_turn_to_dict(t) for t in rows]
 
 
 async def set_in_flight(
@@ -344,6 +515,7 @@ async def get_session_turns(session_id: str) -> list[dict]:
             "ai_justification": turn.ai_justification,
             "ideal_answer":     turn.ideal_answer,
             "is_followup":      int(turn.is_followup),
+            "graded":           bool(turn.graded),
             "answered_at":      _iso(turn.answered_at),
             "teacher_accuracy":  _f(t_acc),
             "teacher_reasoning": _f(t_reas),
