@@ -30,6 +30,11 @@ async def lifespan(app: FastAPI):
     await get_redis().ping()
     print("[Redis] active-exam store ready")
 
+    # Concurrency limiter is a stateless, self-healing Redis sorted-set — no init
+    # needed; it shares the pool above. Log the active limit for visibility.
+    print(f"[LLM] concurrency limit = {settings.llm_max_concurrency} "
+          f"(acquire timeout {settings.llm_acquire_timeout_seconds}s)")
+
     print("\n🚀 QuantumMind backend starting...")
     print(f"   Environment : {settings.app_env}")
     print(f"   Model       : {settings.llm_model}")

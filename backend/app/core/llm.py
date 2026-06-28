@@ -26,24 +26,13 @@ from tenacity import (
 )
 
 from app.core.config import settings
+from app.core import llm_limiter
+from app.core.llm_errors import LLMError, LLMUnavailable, LLMBusy  # re-exported
 
 logger = logging.getLogger("quantummind.llm")
 
 # Strong refs to fire-and-forget accounting tasks so they aren't GC'd mid-flight.
 _accounting_tasks: set = set()
-
-
-# ── Typed seam errors ─────────────────────────────────────────
-class LLMError(Exception):
-    """Base class for LLM seam errors."""
-
-
-class LLMUnavailable(LLMError):
-    """A transient failure that persisted past the retry ceiling (429/timeout/5xx).
-
-    The exam answer path catches this to persist the answer and degrade gracefully
-    (Phase 2 §5); other callers surface it as their normal error path.
-    """
 
 
 # Per-call-type default temperatures. These reproduce the exact values that
@@ -241,7 +230,12 @@ async def chat(
 
     start = time.monotonic()
     try:
-        message = await _run_resilient(lambda: client.ainvoke(messages), timeout=timeout)
+        async with llm_limiter.slot():  # global bounded concurrency (shared via Redis)
+            message = await _run_resilient(lambda: client.ainvoke(messages), timeout=timeout)
+    except LLMBusy:
+        _schedule_accounting(_account(call_type, model_name, None,
+                                      int((time.monotonic() - start) * 1000), "busy"))
+        raise
     except LLMUnavailable:
         _schedule_accounting(_account(call_type, model_name, None,
                                       int((time.monotonic() - start) * 1000), "unavailable"))
@@ -268,20 +262,23 @@ async def stream(
     model_name, temp = _resolve_params(call_type, temperature, model)
     timeout = _resolve_timeout(call_type)
     client = _build_client(model_name, temp, max_tokens, timeout=timeout)
-    attempt = 0
-    while True:
-        attempt += 1
-        yielded = False
-        try:
-            async for chunk in client.astream(messages):
-                if chunk.content:
-                    yielded = True
-                    yield chunk.content
-            return
-        except Exception as exc:
-            if not yielded and _is_transient(exc) and attempt < settings.llm_max_attempts:
-                await asyncio.sleep(_backoff_delay(attempt))
-                continue
-            if _is_transient(exc):
-                raise LLMUnavailable(f"LLM unavailable during stream: {exc}") from exc
-            raise
+    # Hold a global concurrency slot for the whole stream (released on completion
+    # or when the consumer closes the generator). LLMBusy on acquire propagates.
+    async with llm_limiter.slot():
+        attempt = 0
+        while True:
+            attempt += 1
+            yielded = False
+            try:
+                async for chunk in client.astream(messages):
+                    if chunk.content:
+                        yielded = True
+                        yield chunk.content
+                return
+            except Exception as exc:
+                if not yielded and _is_transient(exc) and attempt < settings.llm_max_attempts:
+                    await asyncio.sleep(_backoff_delay(attempt))
+                    continue
+                if _is_transient(exc):
+                    raise LLMUnavailable(f"LLM unavailable during stream: {exc}") from exc
+                raise

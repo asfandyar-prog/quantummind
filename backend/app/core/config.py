@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     llm_retry_base_delay: float = 0.5   # exponential backoff base (seconds)
     llm_retry_max_delay: float = 8.0    # backoff cap (seconds)
     llm_token_budget_per_day: int = 0   # soft daily token budget (0 = unlimited; warn-only)
+    llm_max_concurrency: int = 8             # global in-flight LLM calls (shared via Redis)
+    llm_acquire_timeout_seconds: float = 20.0  # max wait for a slot before LLMBusy
+    llm_limiter_stale_seconds: float = 180.0   # prune window: a dead worker's slot self-expires
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
