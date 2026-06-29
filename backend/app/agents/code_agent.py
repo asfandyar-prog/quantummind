@@ -8,16 +8,12 @@
 
 from typing import TypedDict, Annotated
 import operator
-import subprocess
-import sys
-import tempfile
-import os
 import re
-import asyncio
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 from app.core import llm
+from app.core import executor
 from app.core.memory import get_checkpointer
 
 
@@ -115,39 +111,19 @@ Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
 
 
 async def execute_code(state: CodeAgentState) -> dict:
-    """Run the code. This is the only genuinely agentic step."""
+    """Run the generated code in the sandbox seam (app.core.executor). The only
+    genuinely agentic step. Nothing runs inline here anymore."""
     code = state.get("generated_code", "").strip()
     if not code:
         return {"execution_error": "No code generated."}
 
-    venv = os.environ.get('VIRTUAL_ENV', '')
-    if venv:
-        python_exe = os.path.join(venv, 'Scripts', 'python.exe') \
-            if sys.platform == 'win32' else os.path.join(venv, 'bin', 'python')
-        if not os.path.exists(python_exe):
-            python_exe = sys.executable
-    else:
-        python_exe = sys.executable
-
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-        f.write(code)
-        tmp_path = f.name
-
-    try:
-        result = subprocess.run([python_exe, tmp_path], capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            print(f"[CodeAgent] Execution success ✓")
-            return {"execution_output": result.stdout.strip(), "execution_error": ""}
-        else:
-            err = clean_traceback(result.stderr.strip())
-            print(f"[CodeAgent] Execution failed: {err[:60]}")
-            return {"execution_output": "", "execution_error": err}
-    except subprocess.TimeoutExpired:
-        return {"execution_output": "", "execution_error": "Execution timed out (30s)."}
-    except Exception as e:
-        return {"execution_output": "", "execution_error": str(e)}
-    finally:
-        os.unlink(tmp_path)
+    result = await executor.run_code(code, draw=False)
+    if result.success:
+        print(f"[CodeAgent] Execution success ✓")
+        return {"execution_output": result.stdout.strip(), "execution_error": ""}
+    err = clean_traceback(result.stderr.strip())
+    print(f"[CodeAgent] Execution failed: {err[:60]}")
+    return {"execution_output": "", "execution_error": err}
 
 
 async def increment_retry(state: CodeAgentState) -> dict:
