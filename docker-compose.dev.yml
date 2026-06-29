@@ -36,6 +36,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # Code-execution sandbox image (Phase 3). Not a running service — build only:
+  #   docker compose -f docker-compose.dev.yml --profile build build sandbox
+  # (or: docker build -t quantummind-sandbox sandbox/)
+  sandbox:
+    profiles: ["build"]
+    image: quantummind-sandbox
+    build:
+      context: ./sandbox
+
 volumes:
   quantummind_pgdata:
   quantummind_redisdata:

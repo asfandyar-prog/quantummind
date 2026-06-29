@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     grading_backfill_interval_seconds: float = 15.0  # backfill worker sweep cadence
     grading_backfill_batch: int = 50                 # max stuck turns reconciled per sweep
 
+    # ── Code execution sandbox (Phase 3) ──────────────────────
+    executor: str = "docker"                 # docker (secure) | subprocess (insecure dev only)
+    allow_insecure_executor: bool = False    # must be true to select the subprocess fallback
+    sandbox_image: str = "quantummind-sandbox"
+    executor_timeout_seconds: float = 30.0   # wall-clock cap per run
+    executor_max_concurrency: int = 4        # bound concurrent sandbox runs (host resource)
+    sandbox_memory: str = "256m"
+    sandbox_cpus: float = 0.5
+    sandbox_pids_limit: int = 64
+    sandbox_tmpfs_size: str = "64m"
+
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
     # "development" enables detailed error messages and auto-reload.
@@ -93,6 +104,22 @@ class Settings(BaseSettings):
                 raise ValueError("LLM_PROVIDER=vllm requires LLM_BASE_URL")
         else:
             raise ValueError(f"Unknown LLM_PROVIDER: {provider!r} (use groq|openai|vllm)")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_executor(self):
+        """Fail fast: the insecure subprocess executor can never run in production."""
+        if self.executor not in ("docker", "subprocess"):
+            raise ValueError(f"Unknown EXECUTOR: {self.executor!r} (use docker|subprocess)")
+        if self.executor == "subprocess":
+            if self.app_env == "production":
+                raise ValueError(
+                    "EXECUTOR=subprocess is forbidden in production — set EXECUTOR=docker"
+                )
+            if not self.allow_insecure_executor:
+                raise ValueError(
+                    "EXECUTOR=subprocess requires ALLOW_INSECURE_EXECUTOR=true (insecure, dev only)"
+                )
         return self
 
     class Config:
