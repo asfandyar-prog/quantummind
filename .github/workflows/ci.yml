@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: tests (unit + sandbox + integration-if-configured)
+    runs-on: ubuntu-latest
+    env:
+      # Integration tests (Neon / Upstash) run only when these repo secrets are
+      # set; otherwise they skip cleanly. The sandbox containment tests ALWAYS run
+      # (Docker is preinstalled on the runner). GROQ_API_KEY is intentionally not
+      # set here — the test conftest supplies a dummy and the suite mocks the LLM.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the locked-down execution image so the containment tests can run it.
+      - name: Build the code-execution sandbox image
+        run: docker build -t quantummind-sandbox sandbox/
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      # The full suite. Sandbox containment tests find Docker + the image and run;
+      # integration tests run if DATABASE_URL/REDIS_URL are configured, else skip.
+      - name: Run the full test suite (containment tests included)
+        working-directory: backend
+        run: uv run python -m pytest tests/ -q
