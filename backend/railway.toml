@@ -1,0 +1,26 @@
+# Railway service config for the QuantumMind backend.
+#
+# This file lives in backend/, so the Railway service must have its
+# Root Directory set to "backend". Paths below are relative to that.
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# GET /health returns 200 reading only in-process settings — it makes no
+# Postgres, Redis or Groq call. It is still a meaningful readiness gate:
+# app/main.py's lifespan verifies Postgres and Redis before the server
+# accepts traffic, so if either is down the process exits and this check
+# never answers. A 200 therefore means "startup completed and dependencies
+# were reachable at boot".
+healthcheckPath = "/health"
+
+# Generous: the first boot downloads the all-MiniLM-L6-v2 embedding model
+# and imports torch, which is slow on a cold container.
+healthcheckTimeout = 300
+
+# Restart on crash, but stop after 10 tries so a genuinely broken deploy
+# (bad env var, unreachable database) fails visibly instead of looping.
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
