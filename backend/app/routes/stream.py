@@ -65,9 +65,12 @@ async def stream_response(request: StreamRequest):
         generate(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":               "no-cache",
-            "X-Accel-Buffering":           "no",
-            "Access-Control-Allow-Origin": "*",
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            # No Access-Control-Allow-Origin here. CORSMiddleware in app/main.py
+            # sets it from FRONTEND_URL for every response, streaming included;
+            # hardcoding "*" here overrode that and let any origin read the
+            # stream — the one endpoint that carries the LLM's answers.
         },
     )
 
