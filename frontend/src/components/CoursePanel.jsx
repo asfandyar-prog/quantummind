@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CURRICULUM, getTopicById } from '@/data/curriculum'
+import { API_BASE as BACKEND } from '@/lib/api'
 
 const FONT    = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO    = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
-const BACKEND = 'http://localhost:8000'
 
 function getThreadId() {
   let id = localStorage.getItem('qm_thread_id')

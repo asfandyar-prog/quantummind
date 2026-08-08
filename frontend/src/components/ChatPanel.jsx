@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import useAppState from '@/hooks/useAppState'
+import { API_BASE as BACKEND_URL } from '@/lib/api'
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
-const BACKEND_URL = 'http://localhost:8000'
 
 const SUGGESTIONS = {
   theory:   ['What is quantum superposition?', 'Explain entanglement in simple terms', 'How does a quantum gate work?', 'What makes quantum computers faster?'],

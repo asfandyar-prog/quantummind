@@ -1,10 +1,10 @@
 import { useState, useRef } from 'react'
 import Editor from '@monaco-editor/react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { API_BASE as BACKEND } from '@/lib/api'
 
 const FONT    = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO    = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
-const BACKEND = 'http://localhost:8000'
 
 const STARTER_CODE = `# QuantumMind — Practice Mode
 # Write your Qiskit code and press Run ▶
