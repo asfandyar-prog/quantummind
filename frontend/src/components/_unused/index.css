@@ -1,0 +1,125 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #050507;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(124, 92, 252, 0.35);
+}
+
+/* ---------- Liquid glass system ---------- */
+
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.01);
+  background-blend-mode: luminosity;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: none;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+}
+
+.liquid-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.4px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.45) 0%,
+    rgba(255, 255, 255, 0.15) 20%,
+    rgba(255, 255, 255, 0) 40%,
+    rgba(255, 255, 255, 0) 60%,
+    rgba(255, 255, 255, 0.15) 80%,
+    rgba(255, 255, 255, 0.45) 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.liquid-glass-strong {
+  background: rgba(255, 255, 255, 0.01);
+  background-blend-mode: luminosity;
+  backdrop-filter: blur(50px);
+  -webkit-backdrop-filter: blur(50px);
+  border: none;
+  box-shadow: 4px 4px 4px rgba(0, 0, 0, 0.05), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+}
+
+.liquid-glass-strong::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.4px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0.2) 20%,
+    rgba(255, 255, 255, 0) 40%,
+    rgba(255, 255, 255, 0) 60%,
+    rgba(255, 255, 255, 0.2) 80%,
+    rgba(255, 255, 255, 0.5) 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ---------- Hover states (replaces DC's non-standard style-hover attr) ---------- */
+
+.nav-link {
+  transition: color 0.2s, background 0.2s;
+}
+.nav-link:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.btn-primary {
+  transition: box-shadow 0.25s;
+}
+.btn-primary:hover {
+  box-shadow: 0 0 24px rgba(124, 92, 252, 0.45), 4px 4px 4px rgba(0, 0, 0, 0.05), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+}
+
+.btn-ghost {
+  transition: opacity 0.2s;
+}
+.btn-ghost:hover {
+  opacity: 1;
+}
+
+.mode-card {
+  transition: box-shadow 0.25s;
+}
+.mode-card:hover {
+  box-shadow: 0 0 30px rgba(124, 92, 252, 0.28), inset 0 1px 1px rgba(255, 255, 255, 0.14);
+}
+
+.card-cta {
+  transition: box-shadow 0.25s;
+}
+.card-cta:hover {
+  box-shadow: 0 0 18px rgba(124, 92, 252, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.14);
+}
+
+@media (max-width: 900px) {
+  .nav-center {
+    display: none !important;
+  }
+}
