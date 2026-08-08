@@ -63,9 +63,15 @@ app = FastAPI(
     redoc_url=None,
 )
 
+# The single place CORS is configured. Routes must not set
+# Access-Control-Allow-Origin themselves — doing so overrides these rules.
+# allow_origin_regex is an OR with allow_origins and is only consulted when the
+# exact-match list misses; leaving it unset keeps the strict single-origin
+# behaviour.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
+    allow_origin_regex=settings.cors_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

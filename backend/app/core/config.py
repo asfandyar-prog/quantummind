@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # "development" enables detailed error messages and auto-reload.
     # "production" disables these for security.
 
+    cors_allow_origin_regex: Optional[str] = None
+    # Optional second CORS rule, matched in FULL against the request Origin, for
+    # origins that are not known ahead of time. Vercel gives every preview
+    # deployment its own hostname, so frontend_url alone (one exact origin)
+    # blocks every preview branch. Example:
+    #   ^https://quantummind[a-z0-9-]*\.vercel\.app$
+    # Keep it anchored and specific — a loose pattern such as .*\.vercel\.app$
+    # would hand every Vercel user on the platform access to this API.
+
     frontend_url: str = "http://localhost:5173"
     # Your React app's URL. Used to configure CORS.
     # CORS = Cross-Origin Resource Sharing.
