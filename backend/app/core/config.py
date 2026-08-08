@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     grading_backfill_batch: int = 50                 # max stuck turns reconciled per sweep
 
     # ── Code execution sandbox (Phase 3) ──────────────────────
-    executor: str = "docker"                 # docker (secure) | subprocess (insecure dev only)
+    executor: str = "docker"                 # docker (secure) | subprocess (insecure dev only) | disabled
     allow_insecure_executor: bool = False    # must be true to select the subprocess fallback
     sandbox_image: str = "quantummind-sandbox"
     executor_timeout_seconds: float = 30.0   # wall-clock cap per run
@@ -109,8 +109,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_executor(self):
         """Fail fast: the insecure subprocess executor can never run in production."""
-        if self.executor not in ("docker", "subprocess"):
-            raise ValueError(f"Unknown EXECUTOR: {self.executor!r} (use docker|subprocess)")
+        if self.executor not in ("docker", "subprocess", "disabled"):
+            raise ValueError(
+                f"Unknown EXECUTOR: {self.executor!r} (use docker|subprocess|disabled)"
+            )
+        # "disabled" is always safe — it runs no code at all — so it needs no gating.
         if self.executor == "subprocess":
             if self.app_env == "production":
                 raise ValueError(

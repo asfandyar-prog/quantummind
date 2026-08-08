@@ -28,6 +28,11 @@ logger = logging.getLogger("quantummind.executor")
 
 _MARKER = "__CIRCUIT_IMAGE__"
 
+# Shown to students whenever EXECUTOR=disabled. Single source of truth: the
+# route surfaces it as a 503 body and the code agent embeds it in its answer,
+# so both say exactly the same thing.
+DISABLED_MESSAGE = "Code execution is temporarily unavailable."
+
 
 @dataclass
 class ExecResult:
@@ -95,6 +100,13 @@ def _semaphore() -> asyncio.Semaphore:
 async def run_code(code: str, *, timeout: Optional[float] = None, draw: bool = True) -> ExecResult:
     """Run code in the configured sandbox. Never raises for code errors — a failed,
     timed-out, or limit-exceeded run returns a safe ExecResult(success=False)."""
+    # EXECUTOR=disabled: run nothing at all. Short-circuits before the semaphore
+    # so a disabled deploy cannot queue or block on a resource it will never use.
+    # For hosts with no container runtime (Railway), this is the honest setting —
+    # EXECUTOR=docker there merely fails slower and with a murkier message.
+    if settings.executor == "disabled":
+        return ExecResult(False, "", DISABLED_MESSAGE, "", 0.0)
+
     timeout = timeout if timeout is not None else settings.executor_timeout_seconds
     program = _wrap(code, draw)
     async with _semaphore():

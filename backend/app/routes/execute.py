@@ -5,10 +5,11 @@
 # returns stdout + a circuit diagram as a base64 PNG. All isolation/resource
 # limits and the circuit-draw harness live in the seam — nothing runs inline here.
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core import executor
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -33,7 +34,14 @@ async def execute_code(request: ExecuteRequest):
     The seam wraps the code with the auto-draw harness, runs it under the
     configured executor (a locked-down container in prod), and returns a safe
     result for any failure/timeout/limit — never an unhandled error.
+
+    EXECUTOR=disabled answers 503 instead of 200-with-success=false, so clients
+    and uptime checks can tell "this feature is switched off here" apart from
+    "your code did not compile".
     """
+    if settings.executor == "disabled":
+        raise HTTPException(status_code=503, detail=executor.DISABLED_MESSAGE)
+
     result = await executor.run_code(request.code, draw=True)
     return ExecuteResponse(
         success=result.success,

@@ -64,14 +64,28 @@ export default function CodeEditor() {
         body: JSON.stringify({ code: currentCode, shots: 1024 }),
       })
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // The backend answers 503 when code execution is switched off for this
+      // deployment (EXECUTOR=disabled). That is a real, readable message from
+      // the server — surface it verbatim rather than the generic
+      // "is the backend running?" text, which would be actively misleading.
+      if (!res.ok) {
+        const detail = await res.json().then(d => d?.detail).catch(() => null)
+        const httpErr = new Error(detail || `HTTP ${res.status}`)
+        httpErr.fromServer = Boolean(detail)
+        throw httpErr
+      }
       const data = await res.json()
       setOutput(data)
     } catch (err) {
       setOutput({
         success: false,
         output: '',
-        error: `Connection error: ${err.message}. Is the backend running?`,
+        // A message the server actually sent (e.g. the 503 for EXECUTOR=disabled)
+        // is shown verbatim. Only a genuine transport failure gets the
+        // "is the backend running?" hint, which would be wrong for a 503.
+        error: err.fromServer
+          ? err.message
+          : `Connection error: ${err.message}. Is the backend running?`,
         circuit_image: '',
         execution_time: 0,
       })
