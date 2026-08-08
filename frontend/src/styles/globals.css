@@ -1,6 +1,11 @@
 
 
 
+/* Tailwind v4 does not auto-load tailwind.config.js. Without this directive the
+   entire custom theme — qm-* colours, font-display, animate-fade-up — is
+   silently dropped and those classes resolve to nothing. */
+@config "../../tailwind.config.js";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
