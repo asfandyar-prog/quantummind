@@ -1,0 +1,8 @@
+# Normalize line endings. Without this, the checked-in EOLs depend on each
+# contributor's core.autocrlf, which produces phantom whole-file diffs.
+# Text files are stored LF in the repository and checked out LF everywhere.
+* text=auto eol=lf
+
+# Binary files must never be EOL-converted — doing so corrupts them.
+*.png binary
+*.zip binary
