@@ -23,7 +23,7 @@ def test_normal_circuit_runs_and_draws():
     )
     r = _run(code, draw=True, timeout=60)
     assert r.success, r.stderr
-    assert "{" in r.output and "}" in r.output       # a counts dict was printed
+    assert "{" in r.stdout and "}" in r.stdout       # a counts dict was printed
     assert len(r.circuit_image) > 100                # a real base64 PNG diagram
 
 
@@ -38,8 +38,8 @@ def test_network_is_blocked():
     )
     r = _run(code, timeout=30)
     assert r.success                                  # the code ran; the network didn't
-    assert "NETWORK_BLOCKED" in r.output
-    assert "NETWORK_OK" not in r.output
+    assert "NETWORK_BLOCKED" in r.stdout
+    assert "NETWORK_OK" not in r.stdout
 
 
 def test_infinite_loop_is_killed():
@@ -51,10 +51,22 @@ def test_infinite_loop_is_killed():
 
 def test_memory_bomb_is_contained():
     # 1 GiB allocation under a 256m cap → OOM-killed, not a host OOM.
-    code = "x = bytearray(1024 * 1024 * 1024)\nprint('ALLOCATED', len(x))\n"
+    #
+    # The marker is printed and flushed BEFORE the allocation so the assertions
+    # below can tell "OOM-killed mid-allocation" apart from "the container never
+    # ran at all". Without it, `not r.success` + `'ALLOCATED' not in stdout` are
+    # both satisfied by an empty result — a missing image or a container that
+    # failed to start would pass while proving nothing about the memory cap.
+    code = (
+        "print('SANDBOX_START', flush=True)\n"
+        "x = bytearray(1024 * 1024 * 1024)\n"
+        "print('ALLOCATED', len(x))\n"
+    )
     r = _run(code, timeout=30)
     assert not r.success
-    assert "ALLOCATED" not in r.output
+    assert "SANDBOX_START" in r.stdout                # our code really executed
+    assert "ALLOCATED" not in r.stdout                # the 1 GiB alloc never completed
+    assert "timed out" not in r.stderr.lower()        # killed by the cap, not the clock
 
 
 def test_filesystem_is_read_only_except_tmp():
@@ -72,8 +84,8 @@ def test_filesystem_is_read_only_except_tmp():
     )
     r = _run(code, timeout=30)
     assert r.success, r.stderr
-    assert "'root': 'BLOCKED'" in r.output            # read-only root FS
-    assert "'tmp': 'ALLOWED'" in r.output             # ephemeral writable /tmp
+    assert "'root': 'BLOCKED'" in r.stdout            # read-only root FS
+    assert "'tmp': 'ALLOWED'" in r.stdout             # ephemeral writable /tmp
 
 
 def test_no_secrets_or_app_in_sandbox():
@@ -91,5 +103,5 @@ def test_no_secrets_or_app_in_sandbox():
     )
     r = _run(code, timeout=30)
     assert r.success, r.stderr
-    assert "LEAKED: []" in r.output                   # no secrets reach the sandbox
-    assert "APP_ABSENT" in r.output                   # app code is not present
+    assert "LEAKED: []" in r.stdout                   # no secrets reach the sandbox
+    assert "APP_ABSENT" in r.stdout                   # app code is not present
