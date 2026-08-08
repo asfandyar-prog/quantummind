@@ -22,7 +22,9 @@ built by a student who designed and taught the course it's based on.
 [![Qiskit](https://img.shields.io/badge/Qiskit-6929C4?style=for-the-badge&logo=ibm&logoColor=white)](https://qiskit.org)
 [![License](https://img.shields.io/badge/License-MIT-34C759?style=for-the-badge)](LICENSE)
 
-[**🚀 Live Demo**](https://quantummind.vercel.app) &nbsp;·&nbsp; [**📖 Docs**](#-local-setup) &nbsp;·&nbsp; [**🔬 Research**](#-research-layer)
+[**📖 Docs**](#-local-setup) &nbsp;·&nbsp; [**🔬 Research**](#-research-layer) &nbsp;·&nbsp; [**🚀 Deploying**](DEPLOY.md)
+
+*Live demo coming soon — not yet deployed.*
 
 ---
 
