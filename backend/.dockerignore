@@ -1,0 +1,27 @@
+# Keep the build context small and secrets out of the image.
+
+# Local virtualenv — the image builds its own via `uv sync`.
+.venv/
+
+# Bytecode and test caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Tests are not shipped to production. CI runs them from the checkout, not
+# from this image.
+tests/
+
+# ChromaDB vector store — machine-specific, regenerated on upload.
+data/
+
+# Secrets. Real values come from Railway's environment, never the image.
+.env
+.env.*
+!.env.example
+
+# Misc
+*.log
+*.zip
+.python-version
