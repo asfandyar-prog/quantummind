@@ -1,5 +1,5 @@
 # ── app/routes/exam.py ───────────────────────────────────────
-import os
+import secrets
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -10,6 +10,7 @@ from app.db.audit_db import (
     create_pending_turn, get_pending_turn, get_session_row,
     log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
 )
+from app.core.config import settings
 from app.core.exam_state import save_active, load_active, clear_active
 from app.core.llm_errors import LLMUnavailable, LLMBusy
 
@@ -17,8 +18,20 @@ router = APIRouter()
 
 
 def verify_teacher(password: Optional[str]) -> bool:
-    expected = os.environ.get("TEACHER_PASSWORD", "quantum2025")
-    return password == expected
+    """Check the teacher password against the configured value, in constant time.
+
+    Reads settings.teacher_password rather than os.environ. pydantic-settings
+    parses .env into the settings object WITHOUT exporting to os.environ, so the
+    previous os.environ.get("TEACHER_PASSWORD", "quantum2025") ignored the
+    configured password entirely whenever it came from .env — and silently
+    accepted a hardcoded fallback that appears in no documentation.
+
+    compare_digest avoids leaking the password's length or its matching prefix
+    through response timing.
+    """
+    if not password:
+        return False
+    return secrets.compare_digest(password, settings.teacher_password)
 
 
 # ════════════════════════════════════════════════════════════════
