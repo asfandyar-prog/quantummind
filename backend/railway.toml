@@ -8,6 +8,21 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# Migrations run here, not in an entrypoint script. preDeployCommand runs once
+# per deploy in this same image, before the new version receives traffic, and a
+# non-zero exit aborts the rollout — so a failed migration leaves the previous
+# version serving instead of booting a server against a half-migrated schema.
+#
+# An entrypoint script would instead run on every container start (restarts and
+# scale-ups included), letting replicas race each other on `alembic upgrade
+# head`, and would turn a migration failure into a crash loop rather than a
+# clean "deploy failed".
+#
+# Note: alembic/env.py imports app.core.config, which validates the full
+# settings model — so this command needs the LLM provider vars set too, not
+# just DATABASE_URL. See DEPLOY.md.
+preDeployCommand = ["alembic upgrade head"]
+
 # GET /health returns 200 reading only in-process settings — it makes no
 # Postgres, Redis or Groq call. It is still a meaningful readiness gate:
 # app/main.py's lifespan verifies Postgres and Redis before the server
