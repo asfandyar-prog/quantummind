@@ -31,7 +31,27 @@ dependencies = [
     "python-multipart>=0.0.22",
     "matplotlib>=3.10.8",
     "pylatexenc>=2.10",
+    # Declared directly only so [tool.uv.sources] below can pin it to the CPU
+    # index. It is otherwise a transitive dependency of sentence-transformers,
+    # and uv sources apply only to the project's own dependencies.
+    "torch>=2.11.0",
 ]
+
+# ── PyTorch: CPU-only ─────────────────────────────────────────
+# torch's PyPI wheels bundle the entire CUDA runtime (cuDNN, cuBLAS, NCCL,
+# cuSPARSE, ...), adding multiple GB to the image. Nothing here uses a GPU:
+# torch is present solely because sentence-transformers backs the
+# all-MiniLM-L6-v2 embeddings, which run on CPU (see app/routes/upload.py).
+#
+# explicit = true keeps this index opt-in — only packages routed to it below
+# are fetched from it, so everything else still resolves from PyPI.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
