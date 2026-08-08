@@ -17,7 +17,7 @@ built by a student who designed and taught the course it's based on.
 
 [![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React_18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
+[![React](https://img.shields.io/badge/React_19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![LangGraph](https://img.shields.io/badge/LangGraph-FF6B35?style=for-the-badge&logo=chainlink&logoColor=white)](https://langchain-ai.github.io/langgraph/)
 [![Qiskit](https://img.shields.io/badge/Qiskit-6929C4?style=for-the-badge&logo=ibm&logoColor=white)](https://qiskit.org)
 [![License](https://img.shields.io/badge/License-MIT-34C759?style=for-the-badge)](LICENSE)
@@ -53,10 +53,14 @@ It's the platform I wish existed when I designed and taught the University of De
 | ⚛ | **Theory** | AI tutor that infers your level from your question. Ask in plain English or Dirac notation — it adapts. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
 | ⌨ | **Practice** | Monaco editor (VS Code engine). Write Qiskit, hit Run, see your circuit diagram appear as a live image. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
 | 🎯 | **Guided** | Step-by-step lessons with mandatory check questions. You cannot advance until you demonstrate understanding. | ![Free](https://img.shields.io/badge/Free-34C759?style=flat-square) |
-| 🎓 | **13-Week Course** | | ![Premium](https://img.shields.io/badge/Premium-FF9500?style=flat-square) |
+| 🎓 | **13-Week Course** | The full quantum computing curriculum I designed for 60+ students at the University of Debrecen, as a week-by-week tree. *Currently answers from general knowledge — see agent 07.* | ![Premium](https://img.shields.io/badge/Premium-FF9500?style=flat-square) |
 | 📝 | **Exam Mode** | V1 static · V2 conditional · V3 fully adaptive. Scored on accuracy, reasoning, clarity. Voice input. Full audit trail. | ![Research](https://img.shields.io/badge/Research-7C3AED?style=flat-square) |
 
 </div>
+
+<sub>The Free / Premium / Research tags are roadmap labels, not enforced tiers —
+there is no billing, no entitlement check and no user accounts yet. Every mode is
+open to anyone who loads the app.</sub>
 
 <br/>
 
@@ -66,15 +70,15 @@ It's the platform I wish existed when I designed and taught the University of De
 
 ```mermaid
 graph TD
-    ORC["🧠 ORCHESTRATOR<br/>routes by mode → agent"]
+    ORC["🧠 ORCHESTRATOR<br/>1 LLM call to route<br/>(practice skips it)"]
 
     ORC --> T["⚛ THEORY<br/>1 LLM call<br/>XML prompt + LRU cache"]
-    ORC --> C["⌨ CODE<br/>1–2 LLM calls<br/>Real Qiskit execution"]
-    ORC --> R["📚 RAG<br/>2 LLM calls<br/>ChromaDB week-filtered"]
+    ORC --> C["⌨ CODE<br/>1–2 LLM calls<br/>Qiskit in a Docker sandbox"]
+    ORC -.->|not wired| R["📚 RAG<br/>2 LLM calls<br/>ChromaDB week-filtered"]
     ORC --> L["🎯 LESSON<br/>1 call each<br/>Plan · Teach · Grade"]
     ORC --> E["📝 EXAM<br/>1 call + det. routing<br/>V1 · V2 · V3 adaptive"]
 
-    T --> MEM["💾 MEMORY · CACHE · AUDIT DB"]
+    T --> MEM["💾 POSTGRES · REDIS · LRU CACHE"]
     C --> MEM
     R --> MEM
     E --> MEM
@@ -120,9 +124,13 @@ generate_response → END
 <details>
 <summary><b>02 · Code Agent</b> — 1–2 LLM calls</summary>
 
-**What it does:** Generates Qiskit code + explanation in one structured call, then actually executes it in a subprocess. If it fails, retries once with the error context.
+**What it does:** Generates Qiskit code + explanation in one structured call, then executes it in a locked-down Docker container. If it fails, retries once with the error context.
 
 **Key design:** `temperature=0.1` for code generation — maximum reliability. Deprecated syntax (`Aer.get_backend()`, `execute()`) is fixed deterministically before execution. Returns real output + circuit diagram as base64 PNG.
+
+**Execution backends** (`EXECUTOR`): `docker` is the default and the only secure one — a fresh container per run with no network, a read-only root filesystem, a non-root user, all capabilities dropped, and memory/CPU/PID caps. `subprocess` runs on the host and is an insecure dev-only fallback, gated behind `ALLOW_INSECURE_EXECUTOR=true` and refused outright when `APP_ENV=production`. `disabled` runs nothing and answers 503.
+
+> ⚠️ **Hosted deploys currently run `EXECUTOR=disabled`.** Railway containers have no Docker daemon, so code execution is switched off there and Practice mode reports *"Code execution is temporarily unavailable."* Running locally with Docker gives you the real thing.
 
 ```python
 # Conditional retry loop
@@ -131,11 +139,13 @@ generate → execute → (fail?) → increment_retry → generate → execute �
 </details>
 
 <details>
-<summary><b>03 · RAG Agent</b> — 2 LLM calls</summary>
+<summary><b>03 · RAG Agent</b> — 2 LLM calls · <b>built but not wired in</b></summary>
 
 **What it does:** Retrieves relevant chunks from ChromaDB filtered by week number, generates an answer grounded in course materials, grades the answer quality.
 
 **Key design:** Week-based metadata filtering means a student in Week 3 only gets answers from Week 3 content — not the entire course. Falls back to general knowledge if no materials uploaded.
+
+> ⚠️ **Not reachable at runtime.** The graph is complete and compiles, but the orchestrator never routes to it — see agent 07. Documents uploaded via `/api/upload` are embedded into ChromaDB and then read by nothing.
 </details>
 
 <details>
@@ -163,11 +173,13 @@ generate → execute → (fail?) → increment_retry → generate → execute �
 </details>
 
 <details>
-<summary><b>07 · Orchestrator</b> — 0 LLM calls</summary>
+<summary><b>07 · Orchestrator</b> — 1 LLM call (routing), or 0 in Practice mode</summary>
 
-**What it does:** Routes incoming requests to the correct agent based on mode. `course` → RAG, `practice` → Code, `exam` → Exam, else → Theory.
+**What it does:** Picks the agent for each request. `practice` short-circuits deterministically to the Code agent with no LLM call. Every other mode goes through `route()`, which asks the cheap router model (`LLM_ROUTER_MODEL`) to classify the message and falls back to the Theory agent if the reply is not valid JSON or names an unknown agent.
 
-**Key design:** Mode-based routing is deterministic. Only falls back to LLM classification for ambiguous free-form messages in Theory/Guided mode.
+**Key design:** Only Practice mode is deterministic. Routing elsewhere costs one real LLM call.
+
+> ⚠️ **`course` does not reach the RAG agent.** The orchestrator's `rag` branch is still a stub that falls back to the Theory agent, so Course mode answers from general knowledge and uploaded material is never retrieved — even though the RAG graph below is fully built. Likewise `review` falls back to the Code agent.
 </details>
 
 <br/>
@@ -187,15 +199,21 @@ Aligned with **ETH Zurich's Agentic AI in Education** project direction.
 
 ### Audit Trail
 
-Every exam event is logged to an **append-only** SQLite database. Nothing is ever deleted or updated — only appended. This guarantees reproducibility and fairness.
+Every exam event is logged to **Postgres**, accessed through async SQLAlchemy and
+versioned with Alembic. Teacher reviews are **append-only** — a review is always a
+new row, never an update — so the AI's original score and the teacher's override
+both survive. This guarantees reproducibility and fairness.
 
 ```sql
-exam_sessions   -- session_id, student_name, topic, version (V1/V2/V3), avg_score
-exam_turns      -- question, answer, score_accuracy, score_reasoning, score_clarity
-                --   ai_justification, ideal_answer, is_followup
-teacher_reviews -- ai_scores, teacher_override_scores, delta, feedback, action
-manual_labels   -- ground truth labels for vague answer detection (Experiment 3)
+exam_sessions    -- session_id, student_name, topic, version (V1/V2/V3), avg_score
+exam_turns       -- question, answer, score_accuracy, score_reasoning, score_clarity
+                 --   ai_justification, ideal_answer, is_followup, graded
+teacher_reviews  -- ai_scores, teacher_override_scores, delta, feedback, action
+research_metrics -- aggregate metrics for the experiments below
 ```
+
+Experiment 3's ground-truth labels have no table yet — label those 50 turns
+outside the database for now.
 
 ### Three Experiments
 
@@ -264,16 +282,17 @@ manual_labels   -- ground truth labels for vague answer detection (Experiment 3)
 | **AI Framework** | LangGraph 0.2 | Stateful graphs with conditional edges and memory |
 | **LLM** | Groq llama-3.1-8b-instant | 500+ tokens/sec · free tier · sufficient quality |
 | **RAG** | ChromaDB + HuggingFace all-MiniLM-L6-v2 | Local · free · no API key required |
-| **Code Execution** | Qiskit + AerSimulator | Real quantum simulation in subprocess |
+| **Code Execution** | Qiskit + AerSimulator in a locked-down Docker container | Per-run container: no network, read-only FS, non-root, memory/CPU/PID caps |
 | **Circuit Diagrams** | matplotlib `qc.draw('mpl')` | base64 PNG returned directly to frontend |
 | **Backend** | FastAPI + SSE streaming | Async · real-time token streaming |
-| **Frontend** | React 18 + Vite + Framer Motion | Fast · animated · production-quality |
+| **Frontend** | React 19 + Vite + Framer Motion | Fast · animated · production-quality |
 | **Editor** | Monaco (VS Code engine) | Syntax highlighting · themes · resizable |
-| **Memory** | LangGraph MemorySaver | Thread-based conversation persistence |
-| **Cache** | In-memory LRU (200 items, 1hr TTL) | Repeated questions answered instantly |
-| **Audit DB** | SQLite append-only | Exam trails · teacher overrides · research data |
+| **Memory** | LangGraph `AsyncPostgresSaver` | Conversation memory survives restarts, shared across workers |
+| **Cache** | In-memory LRU (200 items, 1hr TTL) | Repeated questions answered instantly · per-process, so single-worker only |
+| **Audit DB** | Postgres (async SQLAlchemy + Alembic) | Exam trails · teacher overrides · research data |
+| **Active exam state** | Redis, with Postgres as source of truth | Shared across workers; rebuildable from Postgres alone |
 | **Voice** | Web Speech API | Browser-native · zero backend changes |
-| **Hosting** | Railway + Vercel | Free tier · zero cost |
+| **Hosting** | Railway + Vercel | Configured, **not yet deployed** — see [DEPLOY.md](DEPLOY.md) |
 
 </div>
 
@@ -288,7 +307,23 @@ Python 3.12+    →  python.org
 Node.js 18+     →  nodejs.org
 uv              →  curl -LsSf https://astral.sh/uv/install.sh | sh
 Groq API key    →  console.groq.com (free)
+Postgres 14+    →  required — the app exits at startup if it cannot connect
+Redis 6+        →  required — same
+Docker          →  optional, only for Practice mode code execution locally
 ```
+
+Postgres and Redis are **not optional**: startup verifies both and the process
+exits if either is unreachable. The quickest local setup is the bundled stack —
+
+```bash
+docker compose -f docker-compose.dev.yml up -d    # Postgres + Redis
+```
+
+— or point `DATABASE_URL` / `REDIS_URL` at managed instances (Neon, Upstash).
+
+Docker is separately needed to *run student code*. Without it, set
+`EXECUTOR=disabled` and Practice mode reports that execution is unavailable;
+everything else works.
 
 ### Backend
 
@@ -325,10 +360,24 @@ LLM_ROUTER_MODEL=llama-3.1-8b-instant
 GROQ_API_KEY=gsk_...              # from console.groq.com (used when LLM_PROVIDER=groq)
 # LLM_API_KEY=                    # key for openai/vllm endpoints
 # LLM_BASE_URL=                   # OpenAI-compatible base URL; required for vllm
+
+# Datastores — both REQUIRED, startup fails without them
+DATABASE_URL=postgresql+psycopg://quantummind:quantummind@localhost:5432/quantummind
+REDIS_URL=redis://localhost:6379/0
+
 APP_ENV=development
 FRONTEND_URL=http://localhost:5173
 TEACHER_PASSWORD=your_password    # for /teacher dashboard
+EXECUTOR=docker                   # docker | subprocess | disabled
+# CHROMA_PATH=./data/chroma       # relative paths resolve against backend/
+# CORS_ALLOW_ORIGIN_REGEX=        # extra CORS rule, e.g. for preview deploys
 ```
+
+> The `postgresql+psycopg://` scheme is required, not cosmetic — the app builds
+> an **async** SQLAlchemy engine, and a bare `postgresql://` URL selects the
+> synchronous psycopg2 dialect and fails at startup.
+
+`backend/.env.example` is the authoritative, fully-commented list.
 
 ### Upload Course Content
 
@@ -364,11 +413,15 @@ quantummind/
 │       │   └── orchestrator.py       # deterministic mode-based routing
 │       ├── core/
 │       │   ├── config.py             # pydantic settings
-│       │   ├── memory.py             # MemorySaver checkpointer
+│       │   ├── memory.py             # AsyncPostgresSaver checkpointer
+│       │   ├── executor.py           # sandbox seam: docker | subprocess | disabled
+│       │   ├── exam_state.py         # active exam state (Redis + Postgres)
 │       │   ├── cache.py              # LRU cache (200 items)
 │       │   └── prompts.py            # system prompts
 │       ├── db/
-│       │   └── audit_db.py           # append-only SQLite audit trail
+│       │   ├── models.py             # SQLAlchemy models
+│       │   ├── database.py           # async engine + pool
+│       │   └── audit_db.py           # async Postgres audit trail
 │       └── routes/
 │           ├── stream.py             # SSE streaming + progress events
 │           ├── execute.py            # Qiskit execution + circuit PNG
@@ -389,6 +442,8 @@ quantummind/
         │   └── TeacherDashboard.jsx  # review + override + research
         ├── data/
         │   └── curriculum.js         # 13-week course structure
+        ├── lib/
+        │   └── api.js                # API_BASE, from VITE_API_URL
         └── hooks/
             └── useAppState.js        # Zustand global state
 ```
