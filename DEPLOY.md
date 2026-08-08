@@ -176,9 +176,10 @@ regenerable, but know what goes:
 
 Postgres and Redis are separate managed services and are unaffected.
 
-Note `settings.chroma_path` exists in config but is **never read** —
-`upload.py` and `rag_agent.py` each compute their own absolute path. Setting
-`CHROMA_PATH` today does nothing.
+`CHROMA_PATH` is now authoritative: `upload.py` and `rag_agent.py` both resolve
+it through `settings.chroma_dir`. So if you do attach a Railway volume, point
+`CHROMA_PATH` at the mount and both readers follow. A relative value resolves
+against the backend package root, not the working directory.
 
 ---
 
@@ -192,11 +193,12 @@ Deploying does not fix any of these. Ordered by what a real student hits first.
 2. **Course mode never reads uploaded material.** `orchestrator.py` routes
    `"rag"` to a stub that falls back to the theory agent; the fully-built RAG
    graph is unreachable. The UI still says "Searching course materials…".
-3. **Teacher auth is a single shared password.** `verify_teacher` reads
-   `os.environ` directly, so setting `TEACHER_PASSWORD` on Railway *does* work —
-   unlike local `.env`, where it is ignored in favour of a hardcoded
-   `quantum2025`. Still: no rate limiting, no lockout, no timing-safe compare,
-   and it guards every student's name, answers and scores.
+3. **Teacher auth is a single shared password.** It now reads
+   `settings.teacher_password` and compares in constant time, so
+   `TEACHER_PASSWORD` works from both Railway's environment and a local `.env`.
+   Still: one password shared by every teacher, no rate limiting, no lockout,
+   and it guards every student's name, answers and scores. It also still has a
+   default (`quantum2026`) — set it explicitly or that default is live.
 4. **`POST /api/upload` is unauthenticated and unbounded.** Anyone can inject
    content into the vector store or OOM the container with one large file.
 5. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
@@ -208,8 +210,10 @@ Deploying does not fix any of these. Ordered by what a real student hits first.
    check and the grading write are not atomic.
 7. **Single worker only.** The LRU cache and executor semaphore are
    per-process — see the comment in `backend/Dockerfile`.
-8. **Image is multi-GB.** `sentence-transformers` pulls torch and the full CUDA
-   stack, for the RAG path that is currently unreachable. Expect slow builds.
+8. **Image is around 1 GB.** torch is pinned to the CPU-only index, which
+   removed ~2.7 GB of CUDA wheels. It is still the largest thing in the image
+   (~183 MB compressed) and exists solely for the RAG path that is currently
+   unreachable — so it is dead weight until item 2 above is fixed.
 
 **Smaller:**
 
