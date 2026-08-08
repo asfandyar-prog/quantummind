@@ -10,7 +10,6 @@
 
 from typing import TypedDict, Annotated
 import operator
-import os
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
 from langchain_community.vectorstores import Chroma
@@ -18,12 +17,13 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 
 from app.core import llm
+from app.core.config import settings
 from app.core.prompts import RAG_PROMPT, build_rag_prompt
 from app.core.memory import get_checkpointer
 
 # ── ChromaDB setup ────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CHROMA_DIR = os.path.join(BASE_DIR, "data", "chroma")
+# Same source of truth as routes/upload.py — see settings.chroma_dir.
+CHROMA_DIR = settings.chroma_dir
 
 
 def get_vectorstore():

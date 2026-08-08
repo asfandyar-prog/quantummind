@@ -17,11 +17,14 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
+from app.core.config import settings
+
 router = APIRouter()
 
 # ── ChromaDB path ─────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CHROMA_DIR = os.path.join(BASE_DIR, "data", "chroma")
+# Single source of truth: CHROMA_PATH via settings. Previously computed here
+# from __file__ and again in rag_agent.py, so CHROMA_PATH was silently ignored.
+CHROMA_DIR = settings.chroma_dir
 os.makedirs(CHROMA_DIR, exist_ok=True)
 
 # ── Embeddings model ──────────────────────────────────────────

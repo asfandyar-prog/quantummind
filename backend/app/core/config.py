@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
+from pathlib import Path
 from typing import Optional
 # pydantic_settings is an extension of Pydantic specifically for config.
 # It reads environment variables and validates their types automatically.
@@ -97,6 +98,23 @@ class Settings(BaseSettings):
     db_pool_size: int = 10                          # async engine pool size
     db_max_overflow: int = 5                        # pool overflow ceiling
     exam_state_ttl_seconds: int = 86400             # Redis safety TTL (Postgres is source of truth)
+
+    @property
+    def chroma_dir(self) -> str:
+        """The ChromaDB directory as an absolute path — the one place that decides it.
+
+        A relative CHROMA_PATH resolves against the backend package root (the
+        directory holding app/), NOT the process working directory. That
+        reproduces exactly what the previous __file__-derived constants in
+        upload.py and rag_agent.py computed, so the default still lands on
+        backend/data/chroma however uvicorn is launched. An absolute
+        CHROMA_PATH is used unchanged.
+        """
+        p = Path(self.chroma_path)
+        if p.is_absolute():
+            return str(p)
+        backend_root = Path(__file__).resolve().parents[2]   # app/core/ -> app/ -> backend/
+        return str((backend_root / p).resolve())
 
     @model_validator(mode="after")
     def _validate_provider(self):
