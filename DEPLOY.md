@@ -183,24 +183,24 @@ Then open the Vercel URL and check the browser console.
 
 ## 4. CORS_ALLOW_ORIGIN_REGEX — the exact value
 
-Substituting your Vercel project name for `quantummind`:
+Replace `myapp` below with your actual Vercel project name:
 
 ```
-^https://quantummind[a-z0-9-]*\.vercel\.app$
+^https://myapp[a-z0-9-]*\.vercel\.app$
 ```
 
 It is matched in **full** against the `Origin` header, as a second rule OR'd with
-the exact `FRONTEND_URL`. Verified behaviour:
+the exact `FRONTEND_URL`. Verified behaviour, using `myapp` as the project name:
 
 | Origin | Result | Why |
 |---|---|---|
-| `https://quantummind.vercel.app` | ✅ allowed | production |
-| `https://quantummind-git-main-asfand.vercel.app` | ✅ allowed | branch preview |
-| `https://quantummind-a1b2c3.vercel.app` | ✅ allowed | commit preview |
+| `https://myapp.vercel.app` | ✅ allowed | production |
+| `https://myapp-git-main-asfand.vercel.app` | ✅ allowed | branch preview |
+| `https://myapp-a1b2c3.vercel.app` | ✅ allowed | commit preview |
 | `https://totally-other.vercel.app` | ❌ rejected | another project |
-| `https://quantummind.vercel.app.evil.com` | ❌ rejected | suffix attack — `$` anchor |
+| `https://myapp.vercel.app.evil.com` | ❌ rejected | suffix attack — `$` anchor |
 | `https://evil.example.com` | ❌ rejected | unrelated |
-| `http://quantummind.vercel.app` | ❌ rejected | scheme is pinned to https |
+| `http://myapp.vercel.app` | ❌ rejected | scheme is pinned to https |
 
 **Do not loosen this to `.*\.vercel\.app$`.** That would let every site hosted on
 Vercel — by anyone — call your API with credentials.
