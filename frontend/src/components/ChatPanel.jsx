@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import useAppState from '@/hooks/useAppState'
 import { API_BASE as BACKEND_URL } from '@/lib/api'
+import { recentHistory } from '@/lib/chat'
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
@@ -70,7 +71,7 @@ export default function ChatPanel() {
         body: JSON.stringify({
           message: msg,
           mode,
-          chat_history: [],
+          chat_history: recentHistory(messages),
           thread_id: getThreadId()
         }),
       })

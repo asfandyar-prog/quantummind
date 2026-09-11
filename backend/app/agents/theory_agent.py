@@ -83,17 +83,25 @@ async def run_theory_agent(
     result = await get_theory_graph().ainvoke(initial, config=config)
     return result.get("final_response", "")
 
+# Earlier turns replayed into a streamed answer. Only the most recent are sent,
+# so a long conversation can't outgrow the model's context window.
+MAX_HISTORY_MESSAGES = 12
+
+
 async def stream_theory_agent(
     user_message: str,
     chat_history: list | None = None,
     thread_id: str = "default",
 ):
-    """Stream directly from LLM — no waiting for full response."""
-    # Build message history from checkpointer if available
+    """Stream directly from the LLM — no waiting for the full response.
+
+    Token streaming bypasses the graph, so memory on this path is the recent
+    history the client sends, not the checkpointer.
+    """
     messages = [SystemMessage(content=THEORY_SYSTEM)]
 
-    # Add chat history for context
-    for msg in (chat_history or []):
+    # Add recent chat history for context
+    for msg in (chat_history or [])[-MAX_HISTORY_MESSAGES:]:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "ai":

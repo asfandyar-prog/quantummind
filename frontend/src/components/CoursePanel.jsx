@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { CURRICULUM, getTopicById } from '@/data/curriculum'
 import { API_BASE as BACKEND } from '@/lib/api'
+import { recentHistory } from '@/lib/chat'
 
 const FONT    = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const MONO    = 'SF Mono, ui-monospace, Menlo, Consolas, monospace'
@@ -42,7 +43,7 @@ export default function CoursePanel({ activeTopicId, activeWeek, onMarkComplete,
       const res = await fetch(`${BACKEND}/api/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, mode: 'course', chat_history: [], thread_id: `${getThreadId()}_w${activeWeek}_${activeTopicId}`, week: activeWeek }),
+        body: JSON.stringify({ message: msg, mode: 'course', chat_history: recentHistory(messages), thread_id: `${getThreadId()}_w${activeWeek}_${activeTopicId}`, week: activeWeek }),
       })
       const reader = res.body.getReader(); const decoder = new TextDecoder()
       while (true) {

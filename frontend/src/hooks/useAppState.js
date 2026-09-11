@@ -37,6 +37,7 @@ const useAppState = create((set) => ({
   messages: [
     {
       id: '1',
+      demo: true,   // seeded welcome, not something the student said
       role: 'ai',
       content: "Welcome to **Quantum Basics**. Let's start from the ground up.\n\nIn classical computing, a bit is either 0 or 1. In quantum computing, a **qubit** can exist in a *superposition* of both states simultaneously — until measured.\n\nHere's a minimal Qiskit circuit that creates superposition using a Hadamard gate:",
       codeBlock: `from qiskit import QuantumCircuit
@@ -49,12 +50,14 @@ qc.draw('text')`,
     },
     {
       id: '2',
+      demo: true,   // seeded welcome, not something the student said
       role: 'user',
       content: 'What does the Hadamard gate actually do mathematically?',
       timestamp: new Date().toISOString(),
     },
     {
       id: '3',
+      demo: true,   // seeded welcome, not something the student said
       role: 'ai',
       content: "The Hadamard gate maps the computational basis states:\n\n**|0⟩ → (|0⟩ + |1⟩) / √2**\n**|1⟩ → (|0⟩ − |1⟩) / √2**\n\nIt creates an *equal superposition* — a 50/50 probability of measuring either state. This is the foundation of quantum parallelism.",
       timestamp: new Date().toISOString(),
