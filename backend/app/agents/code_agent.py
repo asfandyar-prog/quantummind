@@ -24,6 +24,7 @@ class CodeAgentState(TypedDict):
     explanation:      str
     execution_output: str
     execution_error:  str
+    execution_unavailable: bool   # sandbox off or missing: retrying can't help
     retry_count:      int
     final_response:   str
 
@@ -75,9 +76,18 @@ FORBIDDEN (will cause errors):
 </code_requirements>"""
 
 
+# Recent turns replayed from the checkpointer into the prompt. Older turns stay
+# stored; they just stop being sent, so a long session can't outgrow the context.
+MAX_HISTORY_MESSAGES = 12
+
+
 async def generate(state: CodeAgentState) -> dict:
-    """1 LLM call — generates code + explanation together."""
-    messages = [SystemMessage(content=CODE_SYSTEM)] + state["messages"]
+    """1 LLM call — generates code + explanation together.
+
+    state["messages"] already ends with the student's message (the checkpointer
+    replays earlier turns before it), so it is not appended a second time.
+    """
+    messages = [SystemMessage(content=CODE_SYSTEM)] + state["messages"][-MAX_HISTORY_MESSAGES:]
 
     if state.get("execution_error") and state.get("retry_count", 0) > 0:
         messages.append(HumanMessage(content=f"""Fix this error:
@@ -90,8 +100,6 @@ Broken code:
 ```
 
 Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
-    else:
-        messages.append(HumanMessage(content=state["user_message"]))
 
     print(f"[CodeAgent] LLM call #{state.get('retry_count', 0) + 1}")
     response = await llm.chat(messages, call_type="code")
@@ -115,15 +123,20 @@ async def execute_code(state: CodeAgentState) -> dict:
     genuinely agentic step. Nothing runs inline here anymore."""
     code = state.get("generated_code", "").strip()
     if not code:
-        return {"execution_error": "No code generated."}
+        return {"execution_error": "No code generated.", "execution_unavailable": False}
 
     result = await executor.run_code(code, draw=False)
     if result.success:
         print(f"[CodeAgent] Execution success ✓")
-        return {"execution_output": result.stdout.strip(), "execution_error": ""}
+        return {"execution_output": result.stdout.strip(), "execution_error": "", "execution_unavailable": False}
+    if result.unavailable:
+        # The sandbox is switched off or missing. Not a code error, so another
+        # generation can't fix it; say so in the answer instead.
+        print(f"[CodeAgent] Execution unavailable: {result.stderr}")
+        return {"execution_output": "", "execution_error": result.stderr, "execution_unavailable": True}
     err = clean_traceback(result.stderr.strip())
     print(f"[CodeAgent] Execution failed: {err[:60]}")
-    return {"execution_output": "", "execution_error": err}
+    return {"execution_output": "", "execution_error": err, "execution_unavailable": False}
 
 
 async def increment_retry(state: CodeAgentState) -> dict:
@@ -138,13 +151,17 @@ async def assemble(state: CodeAgentState) -> dict:
         parts.append(f"\n```python\n{state['generated_code']}\n```")
     if state.get("execution_output"):
         parts.append(f"\n**Output:**\n```\n{state['execution_output']}\n```")
-    if state.get("execution_error") and state.get("retry_count", 0) >= 1:
+    if state.get("execution_unavailable"):
+        parts.append(f"\n⚠️ Not run: {state['execution_error']} Please test it in your environment.")
+    elif state.get("execution_error") and state.get("retry_count", 0) >= 1:
         parts.append("\n⚠️ Could not auto-validate. Please test in your environment.")
     final = "\n".join(parts)
     return {"final_response": final, "messages": [AIMessage(content=final)]}
 
 
 def should_retry(state: CodeAgentState) -> str:
+    if state.get("execution_unavailable"):
+        return "done"   # an infrastructure outage, not a bug the model can fix
     if state.get("execution_error") and state.get("retry_count", 0) < 1:
         return "retry"
     return "done"
@@ -176,7 +193,7 @@ async def run_code_agent(user_message: str, chat_history: list | None = None, th
         "messages": [HumanMessage(content=user_message)],
         "user_message": user_message,
         "generated_code": "", "explanation": "",
-        "execution_output": "", "execution_error": "",
+        "execution_output": "", "execution_error": "", "execution_unavailable": False,
         "retry_count": 0, "final_response": "",
     }
     config = {"configurable": {"thread_id": thread_id}}

@@ -41,6 +41,7 @@ class ExecResult:
     stderr: str
     circuit_image: str   # base64 PNG, or ""
     duration: float
+    unavailable: bool = False   # the sandbox itself is off or missing: not the code's fault
 
 
 # The drawing harness, appended after the user's code (markers baked in once).
@@ -105,7 +106,7 @@ async def run_code(code: str, *, timeout: Optional[float] = None, draw: bool = T
     # For hosts with no container runtime (Railway), this is the honest setting —
     # EXECUTOR=docker there merely fails slower and with a murkier message.
     if settings.executor == "disabled":
-        return ExecResult(False, "", DISABLED_MESSAGE, "", 0.0)
+        return ExecResult(False, "", DISABLED_MESSAGE, "", 0.0, unavailable=True)
 
     timeout = timeout if timeout is not None else settings.executor_timeout_seconds
     program = _wrap(code, draw)
@@ -153,7 +154,8 @@ async def _run_docker(program: str, timeout: float) -> ExecResult:
         await asyncio.to_thread(_docker_kill, name)   # authoritative wall-clock enforcement
         return ExecResult(False, "", f"Execution timed out ({timeout:.0f}s).", "", time.monotonic() - start)
     except FileNotFoundError:
-        return ExecResult(False, "", "Sandbox unavailable: docker not found on host.", "", time.monotonic() - start)
+        return ExecResult(False, "", "Sandbox unavailable: docker not found on host.", "",
+                          time.monotonic() - start, unavailable=True)
 
     duration = time.monotonic() - start
     stdout, b64 = _parse_circuit(result.stdout.decode(errors="replace"))
