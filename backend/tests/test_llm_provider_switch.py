@@ -91,4 +91,5 @@ def test_build_client_passes_groq_params(monkeypatch):
     llm._build_client("some-model", 0.0, None)
     assert captured["base_url"] == "https://api.groq.com/openai/v1"
     assert captured["model"] == "some-model"
+    assert captured["max_retries"] == 0          # tenacity is the only retry layer
     assert str(captured["api_key"]) == "gk" or captured["api_key"] == "gk"
