@@ -9,7 +9,7 @@
 import os
 import json
 import tempfile
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -17,6 +17,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
+from app.core.auth import require_teacher
 from app.core.config import settings
 
 router = APIRouter()
@@ -26,6 +27,10 @@ router = APIRouter()
 # from __file__ and again in rag_agent.py, so CHROMA_PATH was silently ignored.
 CHROMA_DIR = settings.chroma_dir
 os.makedirs(CHROMA_DIR, exist_ok=True)
+
+# Course material comes from teachers. Without a cap, one large file is read
+# fully into memory before anything else happens.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 # ── Embeddings model ──────────────────────────────────────────
 # all-MiniLM-L6-v2: small (80MB), fast, runs locally, free.
@@ -57,7 +62,7 @@ def get_vectorstore():
     )
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_teacher)])
 async def upload_file(
     file: UploadFile = File(...),
     week: int = Form(...),
@@ -65,7 +70,8 @@ async def upload_file(
     # Used to filter retrieval — when on Week 3, only retrieve Week 3 docs
 ):
     """
-    Upload a PDF or Jupyter notebook for a specific course week.
+    Upload a PDF or Jupyter notebook for a specific course week. Teacher-only
+    (X-Teacher-Password header), at most MAX_UPLOAD_BYTES.
 
     The file is:
     1. Saved to a temp location
@@ -88,11 +94,17 @@ async def upload_file(
             detail=f"Unsupported file type: {ext}. Allowed: {allowed_extensions}"
         )
 
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large; the limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
+
     # Save uploaded file to temp location
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=ext
     ) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
@@ -133,6 +145,8 @@ async def upload_file(
             "message":  f"Successfully ingested {len(chunks)} chunks from {filename}",
         })
 
+    except HTTPException:
+        raise  # e.g. the 400 for a file with no extractable text, not a 500
     except Exception as e:
         print(f"[Upload] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -190,7 +204,7 @@ def load_text(path: str, filename: str):
     return [Document(page_content=text, metadata={"filename": filename})]
 
 
-@router.get("/upload/status")
+@router.get("/upload/status", dependencies=[Depends(require_teacher)])
 async def upload_status():
     """Returns how many documents are in the vector store."""
     try:

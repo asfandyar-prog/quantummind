@@ -49,6 +49,7 @@ def test_subprocess_executor_refused_in_production():
         Settings(
             _env_file=None, groq_api_key="k",
             executor="subprocess", app_env="production", allow_insecure_executor=True,
+            teacher_password="not-the-default",
         )
     assert "production" in str(exc.value)
 
@@ -70,7 +71,8 @@ def test_subprocess_executor_allowed_in_dev_with_opt_in():
 
 
 def test_docker_executor_is_fine():
-    s = Settings(_env_file=None, groq_api_key="k", executor="docker", app_env="production")
+    s = Settings(_env_file=None, groq_api_key="k", executor="docker", app_env="production",
+                 teacher_password="not-the-default")
     assert s.executor == "docker"
 
 
