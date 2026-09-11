@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_engine, get_sessionmaker
@@ -526,17 +526,42 @@ async def get_all_sessions(limit: int = 50) -> list[dict]:
 
 
 async def get_session_turns(session_id: str) -> list[dict]:
-    """Get all turns for a session (with any teacher review) — for transcript review."""
-    stmt = (
+    """Get all turns for a session (with its latest teacher review) — for transcript review.
+
+    Reviews are append-only, so a turn can have several. Only the most recent one
+    is joined: a plain outer join would repeat the turn once per review and
+    double-count it in everything built on this list (the exam-state rebuild,
+    backfill averages, the teacher transcript).
+    """
+    latest_review = (
         select(
-            ExamTurn,
+            TeacherReview.turn_id,
             TeacherReview.teacher_accuracy,
             TeacherReview.teacher_reasoning,
             TeacherReview.teacher_clarity,
             TeacherReview.teacher_feedback,
-            TeacherReview.action.label("review_action"),
+            TeacherReview.action,
+            func.row_number().over(
+                partition_by=TeacherReview.turn_id,
+                order_by=TeacherReview.reviewed_at.desc(),
+            ).label("rn"),
         )
-        .outerjoin(TeacherReview, TeacherReview.turn_id == ExamTurn.turn_id)
+        .where(TeacherReview.session_id == session_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            ExamTurn,
+            latest_review.c.teacher_accuracy,
+            latest_review.c.teacher_reasoning,
+            latest_review.c.teacher_clarity,
+            latest_review.c.teacher_feedback,
+            latest_review.c.action.label("review_action"),
+        )
+        .outerjoin(
+            latest_review,
+            (latest_review.c.turn_id == ExamTurn.turn_id) & (latest_review.c.rn == 1),
+        )
         .where(ExamTurn.session_id == session_id)
         .order_by(ExamTurn.turn_number.asc())
     )
