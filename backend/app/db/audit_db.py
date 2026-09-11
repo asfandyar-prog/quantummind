@@ -280,6 +280,15 @@ async def get_pending_turn(session_id: str) -> Optional[dict]:
     return _turn_to_dict(t) if t is not None else None
 
 
+async def get_turn(session_id: str, turn_id: str) -> Optional[dict]:
+    """One turn of one session, or None."""
+    async with get_sessionmaker()() as session:
+        t = (await session.execute(
+            select(ExamTurn).where(ExamTurn.turn_id == turn_id, ExamTurn.session_id == session_id)
+        )).scalar_one_or_none()
+    return _turn_to_dict(t) if t is not None else None
+
+
 async def get_pending_turns(limit: int = 50) -> list[dict]:
     """All stuck turns across active sessions (ungraded OR graded-but-not-advanced)
     — the backfill worker's reconciliation set."""

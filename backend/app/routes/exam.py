@@ -11,7 +11,7 @@ from app.agents.exam_agent import (
 )
 from app.db.audit_db import (
     create_session, end_session, set_in_flight, advance_exam, complete_exam,
-    create_pending_turn, get_pending_turn, get_session_row, StaleTurn,
+    create_pending_turn, get_pending_turn, get_session_row, get_turn, StaleTurn,
     log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
 )
 from app.core.config import settings
@@ -114,6 +114,7 @@ async def _stale_response(session_id: str) -> JSONResponse:
         "exam_complete": not active,
         "current_question": row["current_question"] if active else None,
         "turn_number": row["current_turn_number"] if active else None,
+        "is_followup": row["current_is_followup"] if active else False,
     })
 
 
@@ -292,13 +293,27 @@ async def get_session(session_id: str):
 
 
 @router.get("/exam/session/{session_id}/status")
-async def session_status(session_id: str):
-    """Poll point for the 'answer saved, grading catching up' UX (Phase 5 consumes
-    this). awaiting_grade flips false once the backfill worker has graded and
-    advanced; then current_question is the next question (or exam_complete)."""
+async def session_status(session_id: str, turn_id: Optional[str] = None):
+    """Poll point for the 'answer saved, grading catching up' UX.
+
+    awaiting_grade flips false once the backfill worker has graded the answer and
+    moved the exam on; current_question is then the next question (or
+    exam_complete is true). Pass the turn_id from the saved_pending_grading
+    response to get that answer's result back once it is graded.
+    """
     row = await get_session_row(session_id)
     if row is None:
         raise HTTPException(404, "Session not found.")
+
+    resp = await _session_position(session_id, row)
+    if turn_id is not None:
+        turn = await get_turn(session_id, turn_id)
+        resp["turn"] = _turn_result(turn) if turn is not None and turn["graded"] else None
+    return resp
+
+
+async def _session_position(session_id: str, row: dict) -> dict:
+    """Where the session stands: completed, waiting for an answer, or mid-grading."""
     if row["status"] != "active":
         return {"status": "completed", "awaiting_grade": False, "exam_complete": True}
 
@@ -311,6 +326,7 @@ async def session_status(session_id: str):
             "exam_complete": False,
             "current_question": row["current_question"],
             "turn_number": row["current_turn_number"],
+            "is_followup": row["current_is_followup"],
         }
 
     # An answer is mid-processing (grading and/or next-question generation).
@@ -321,7 +337,7 @@ async def session_status(session_id: str):
         "turn_id": pending["turn_id"],
         "graded": bool(pending["graded"]),
     }
-    if pending["graded"]:
+    if pending["graded"] and pending["score_total"] is not None:
         resp["scores"] = {
             "accuracy":  pending["score_accuracy"],
             "reasoning": pending["score_reasoning"],
@@ -329,6 +345,23 @@ async def session_status(session_id: str):
             "total":     pending["score_total"],
         }
     return resp
+
+
+def _turn_result(t: dict) -> dict:
+    """One graded answer, in the same shape /exam/answer returns it."""
+    scored = t["score_total"] is not None
+    return {
+        "turn_id": t["turn_id"],
+        "scores": {
+            "accuracy":  t["score_accuracy"],
+            "reasoning": t["score_reasoning"],
+            "clarity":   t["score_clarity"],
+            "total":     t["score_total"],
+        } if scored else None,
+        "needs_review": not scored,
+        "justification": t["ai_justification"],
+        "ideal_answer": t["ideal_answer"],
+    }
 
 
 # ════════════════════════════════════════════════════════════════
