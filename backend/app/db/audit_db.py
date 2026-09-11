@@ -432,34 +432,53 @@ async def complete_exam(
 # TEACHER REVIEW OPERATIONS
 # ════════════════════════════════════════════════════════════════
 
+def _delta(teacher: Optional[float], ai: Optional[float]) -> Optional[float]:
+    """teacher - AI, or None when the AI produced no score to compare against."""
+    return round(teacher - ai, 2) if teacher is not None and ai is not None else None
+
+
 async def log_teacher_review(
     session_id:        str,
     turn_id:           str,
-    ai_accuracy:       float,
-    ai_reasoning:      float,
-    ai_clarity:        float,
     teacher_accuracy:  Optional[float],
     teacher_reasoning: Optional[float],
     teacher_clarity:   Optional[float],
     teacher_feedback:  str,
     teacher_notes:     str,
     action:            str,  # 'accepted' or 'modified'
-) -> str:
-    """Log a teacher review. Always appends — never updates."""
+) -> Optional[str]:
+    """Log a teacher review. Always appends — never updates.
+
+    The AI's scores are read from the stored turn in the same session, never taken
+    from the caller, so the "AI said X, teacher said Y" record can't be forged or
+    mistyped. Returns None if the turn isn't part of the session; raises ValueError
+    when accepting an answer that has no AI score to accept.
+    """
     review_id = str(uuid.uuid4())
-    ai_total = round((ai_accuracy + ai_reasoning + ai_clarity) / 3, 2)
-
-    if action == "modified" and teacher_accuracy is not None:
-        t_total         = round((teacher_accuracy + teacher_reasoning + teacher_clarity) / 3, 2)
-        delta_accuracy  = round(teacher_accuracy  - ai_accuracy,  2)
-        delta_reasoning = round(teacher_reasoning - ai_reasoning, 2)
-        delta_clarity   = round(teacher_clarity   - ai_clarity,   2)
-    else:
-        t_total = ai_total
-        teacher_accuracy = teacher_reasoning = teacher_clarity = None
-        delta_accuracy = delta_reasoning = delta_clarity = 0.0
-
     async with get_sessionmaker()() as session:
+        turn = (await session.execute(
+            select(ExamTurn).where(ExamTurn.turn_id == turn_id, ExamTurn.session_id == session_id)
+        )).scalar_one_or_none()
+        if turn is None:
+            return None
+
+        ai_accuracy  = _f(turn.score_accuracy)
+        ai_reasoning = _f(turn.score_reasoning)
+        ai_clarity   = _f(turn.score_clarity)
+        ai_total     = _f(turn.score_total)
+
+        if action == "modified":
+            t_total         = _mean_score(teacher_accuracy, teacher_reasoning, teacher_clarity)
+            delta_accuracy  = _delta(teacher_accuracy,  ai_accuracy)
+            delta_reasoning = _delta(teacher_reasoning, ai_reasoning)
+            delta_clarity   = _delta(teacher_clarity,   ai_clarity)
+        else:
+            if ai_total is None:
+                raise ValueError("This answer has no AI score to accept; submit teacher scores instead.")
+            t_total = ai_total
+            teacher_accuracy = teacher_reasoning = teacher_clarity = None
+            delta_accuracy = delta_reasoning = delta_clarity = 0.0
+
         session.add(TeacherReview(
             review_id=review_id,
             session_id=session_id,

@@ -3,7 +3,7 @@ import secrets
 from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from app.agents.exam_agent import (
     generate_question, grade_answer, decide_followup,
@@ -352,27 +352,32 @@ async def teacher_session(session_id: str, x_teacher_password: Optional[str] = H
 class ReviewRequest(BaseModel):
     session_id: str
     turn_id:    str
-    action:     str   # 'accepted' or 'modified'
-    teacher_accuracy:  Optional[float] = None
-    teacher_reasoning: Optional[float] = None
-    teacher_clarity:   Optional[float] = None
+    action:     Literal["accepted", "modified"]
+    teacher_accuracy:  Optional[float] = Field(default=None, ge=0, le=10)
+    teacher_reasoning: Optional[float] = Field(default=None, ge=0, le=10)
+    teacher_clarity:   Optional[float] = Field(default=None, ge=0, le=10)
     teacher_feedback:  str = ""
     teacher_notes:     str = ""
-    ai_accuracy:       float = 5.0
-    ai_reasoning:      float = 5.0
-    ai_clarity:        float = 5.0
+    # No ai_* fields: the AI's scores are read from the stored turn, never taken
+    # from the client. Older clients that still send them are ignored.
 
 
 @router.post("/teacher/review")
 async def teacher_review(req: ReviewRequest, x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    review_id = await log_teacher_review(
-        session_id=req.session_id, turn_id=req.turn_id,
-        ai_accuracy=req.ai_accuracy, ai_reasoning=req.ai_reasoning, ai_clarity=req.ai_clarity,
-        teacher_accuracy=req.teacher_accuracy, teacher_reasoning=req.teacher_reasoning, teacher_clarity=req.teacher_clarity,
-        teacher_feedback=req.teacher_feedback, teacher_notes=req.teacher_notes, action=req.action,
-    )
+    if req.action == "modified" and None in (req.teacher_accuracy, req.teacher_reasoning, req.teacher_clarity):
+        raise HTTPException(400, "A modified review needs all three teacher scores.")
+    try:
+        review_id = await log_teacher_review(
+            session_id=req.session_id, turn_id=req.turn_id,
+            teacher_accuracy=req.teacher_accuracy, teacher_reasoning=req.teacher_reasoning, teacher_clarity=req.teacher_clarity,
+            teacher_feedback=req.teacher_feedback, teacher_notes=req.teacher_notes, action=req.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if review_id is None:
+        raise HTTPException(404, "Turn not found in this session.")
     return {"review_id": review_id, "status": "logged"}
 
 
