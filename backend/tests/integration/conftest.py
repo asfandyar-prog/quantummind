@@ -53,6 +53,11 @@ def _check_reachable():
 
 
 INTEGRATION_OK, SKIP_REASON = _check_reachable()
+
+# CI sets REQUIRE_INTEGRATION=1 so unreachable services fail the run instead of
+# skipping every integration test, which is how they went unrun in CI before.
+if not INTEGRATION_OK and os.environ.get("REQUIRE_INTEGRATION") == "1":
+    raise RuntimeError(f"REQUIRE_INTEGRATION=1 but integration resources are unreachable: {SKIP_REASON}")
 _MIGRATED = False
 
 
