@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_engine, get_sessionmaker
 from app.db.models import ExamSession, ExamTurn, TeacherReview
@@ -32,6 +33,14 @@ def _f(v) -> Optional[float]:
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt is not None else None
+
+
+class StaleTurn(Exception):
+    """The session is no longer at the turn this write was computed for.
+
+    Raised when another request already recorded or advanced past that turn — a
+    double submit, or a stale Redis hot copy. Nothing was written.
+    """
 
 
 # ════════════════════════════════════════════════════════════════
@@ -149,7 +158,11 @@ async def create_pending_turn(
             graded=False,
             answered_at=_now(),
         ))
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise StaleTurn(f"turn {turn_number} of {session_id} is already recorded") from exc
     print(f"[AuditDB] Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
     return turn_id
 
@@ -299,6 +312,20 @@ async def set_in_flight(
     print(f"[AuditDB] In-flight set: {session_id} | turn={current_turn_number}")
 
 
+async def _add_turn_if_advanced(session, update_result, turn: ExamTurn) -> None:
+    """Finish an advance/complete transaction: insert the turn only if the guarded
+    session UPDATE matched, and turn a unique-constraint hit into StaleTurn."""
+    if update_result.rowcount != 1:
+        await session.rollback()
+        raise StaleTurn(f"{turn.session_id} is no longer at turn {turn.turn_number}")
+    session.add(turn)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise StaleTurn(f"turn {turn.turn_number} of {turn.session_id} is already recorded") from exc
+
+
 async def advance_exam(
     *,
     session_id:          str,
@@ -316,17 +343,26 @@ async def advance_exam(
     next_is_followup:    bool,
     next_followup_count: int,
 ) -> str:
-    """ONE transaction: persist the completed turn AND set the next in-flight question."""
+    """ONE transaction: persist the completed turn AND set the next in-flight question.
+
+    Conditional on the session still being parked at turn_number. The UPDATE runs
+    first so it takes the session row lock: a concurrent submit for the same turn
+    blocks, re-reads the row, matches nothing and raises StaleTurn instead of
+    inserting a second copy of the turn.
+    """
     turn = _make_turn(
         session_id, turn_number, question, student_answer,
         score_accuracy, score_reasoning, score_clarity,
         ai_justification, ideal_answer, is_followup,
     )
     async with get_sessionmaker()() as session:
-        session.add(turn)
-        await session.execute(
+        result = await session.execute(
             update(ExamSession)
-            .where(ExamSession.session_id == session_id)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == turn_number,
+                ExamSession.status == "active",
+            )
             .values(
                 current_question=next_question,
                 current_turn_number=next_turn_number,
@@ -334,7 +370,7 @@ async def advance_exam(
                 followup_count=next_followup_count,
             )
         )
-        await session.commit()
+        await _add_turn_if_advanced(session, result, turn)
     print(f"[AuditDB] Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
     return turn.turn_id
 
@@ -354,17 +390,24 @@ async def complete_exam(
     avg_score:        float,
     total_turns:      int,
 ) -> str:
-    """ONE transaction: persist the final turn AND mark the session completed."""
+    """ONE transaction: persist the final turn AND mark the session completed.
+
+    Conditional on the session still being parked at turn_number, exactly as
+    advance_exam — a concurrent or stale submit raises StaleTurn.
+    """
     turn = _make_turn(
         session_id, turn_number, question, student_answer,
         score_accuracy, score_reasoning, score_clarity,
         ai_justification, ideal_answer, is_followup,
     )
     async with get_sessionmaker()() as session:
-        session.add(turn)
-        await session.execute(
+        result = await session.execute(
             update(ExamSession)
-            .where(ExamSession.session_id == session_id)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == turn_number,
+                ExamSession.status == "active",
+            )
             .values(
                 ended_at=_now(),
                 total_turns=total_turns,
@@ -373,7 +416,7 @@ async def complete_exam(
                 current_question=None,
             )
         )
-        await session.commit()
+        await _add_turn_if_advanced(session, result, turn)
     print(f"[AuditDB] Turn logged + completed: {turn.turn_id} | avg={avg_score}")
     return turn.turn_id
 

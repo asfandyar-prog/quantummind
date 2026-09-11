@@ -1,13 +1,14 @@
 # ── app/routes/exam.py ───────────────────────────────────────
 import secrets
 from fastapi import APIRouter, HTTPException, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
 from app.agents.exam_agent import generate_question, grade_answer, decide_followup
 from app.db.audit_db import (
     create_session, end_session, set_in_flight, advance_exam, complete_exam,
-    create_pending_turn, get_pending_turn, get_session_row,
+    create_pending_turn, get_pending_turn, get_session_row, StaleTurn,
     log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
 )
 from app.core.config import settings
@@ -93,6 +94,24 @@ def _pending_response(turn_id: str) -> dict:
         "exam_complete": False,
         "message": "Your answer is saved. Grading is catching up — check back shortly.",
     }
+
+
+async def _stale_response(session_id: str) -> JSONResponse:
+    """409 for an answer to a turn this session has already moved past.
+
+    Drops the possibly-stale Redis copy so the next read rebuilds from Postgres,
+    and returns the session's real position so the client can resync.
+    """
+    await clear_active(session_id)
+    row = await get_session_row(session_id)
+    active = row is not None and row["status"] == "active"
+    return JSONResponse(status_code=409, content={
+        "status": "stale",
+        "message": "That question was already answered. Showing the current question.",
+        "exam_complete": not active,
+        "current_question": row["current_question"] if active else None,
+        "turn_number": row["current_turn_number"] if active else None,
+    })
 
 
 @router.post("/exam/answer")
@@ -219,14 +238,25 @@ async def submit_answer(req: AnswerRequest):
             "turn_number": turn_num + 1 if not exam_complete else turn_num,
         }
 
+    except StaleTurn:
+        # Another request already recorded this turn, or the Redis copy was stale.
+        return await _stale_response(req.session_id)
+
     except (LLMUnavailable, LLMBusy):
         # LLM down/saturated: persist the answer durably (graded=false) BEFORE
         # responding. The backfill worker grades it and advances the exam later.
-        turn_id = await create_pending_turn(
-            session_id=req.session_id, turn_number=turn_num,
-            question=question, student_answer=req.student_answer,
-            is_followup=is_followup_for_turn,
-        )
+        try:
+            turn_id = await create_pending_turn(
+                session_id=req.session_id, turn_number=turn_num,
+                question=question, student_answer=req.student_answer,
+                is_followup=is_followup_for_turn,
+            )
+        except StaleTurn:
+            # A concurrent request already recorded this turn — pending or graded.
+            existing = await get_pending_turn(req.session_id)
+            if existing is not None:
+                return _pending_response(existing["turn_id"])
+            return await _stale_response(req.session_id)
         await clear_active(req.session_id)  # Redis copy is stale; rebuild from PG next
         return _pending_response(turn_id)
 
