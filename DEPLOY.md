@@ -50,7 +50,7 @@ there are no other Railway services to reference.
 | `EXECUTOR` | `disabled` | Railway has no Docker daemon — see §5 |
 | `FRONTEND_URL` | `https://<your-project>.vercel.app` | Exact CORS origin, set in §3 |
 | `CORS_ALLOW_ORIGIN_REGEX` | see §4 | Lets Vercel preview deploys through |
-| `TEACHER_PASSWORD` | a real password | Secret. There is a default (`quantum2026`) — if you skip this, that default is live |
+| `TEACHER_PASSWORD` | a real password | Secret. With `APP_ENV=production` the app refuses to start while this is still the published default (`quantum2026`) |
 
 **Leave unset** — the defaults in `app/core/config.py` are already right:
 `LLM_PROVIDER`, `LLM_MODEL`, `LLM_ROUTER_MODEL`, all `LLM_*` resilience knobs,
@@ -110,8 +110,8 @@ redis://…   ->  Connection
 `upstash.io` domain fails DNS resolution from the machine this was checked on —
 not just your database, the apex domain too, while Neon and GitHub resolved
 normally through the same resolver. That points at local DNS filtering rather
-than a deleted database, but it means the instance is **unverified**. This is
-also why the integration test suite has been skipping its Redis tests all along.
+than a deleted database, but it means the instance is **unverified**. CI doesn't
+depend on it: the integration suite runs against its own service containers.
 
 Before you deploy, confirm it from another network or the Upstash console. If
 the database has lapsed, the backend will boot-loop: `app/main.py`'s lifespan
@@ -298,28 +298,32 @@ against the backend package root, not the working directory.
 
 Deploying fixes none of these. Ordered by what a real student hits first.
 
+Before deploying this version: migration `0003` adds a unique constraint on
+`(session_id, turn_number)` and refuses to run if the database already holds
+duplicate turns. The pre-deploy command then fails and the previous version keeps
+serving; resolve the duplicates by hand and redeploy.
+
 **Broken:**
 
 1. **Practice mode cannot run code** — §5, by design.
 2. **Course mode never reads uploaded material.** The orchestrator's `rag`
-   branch is a stub that falls back to the theory agent; the fully-built RAG
-   graph is unreachable. The UI still says "Searching course materials…".
-3. **Teacher auth is one shared password.** Constant-time and read from
-   settings, but no rate limiting, no lockout, no accounts — and it guards every
-   student's name, answers and scores.
-4. **`POST /api/upload` is unauthenticated and unbounded.** Anyone can inject
-   content into the vector store or exhaust memory with one large file.
-5. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
+   branch falls back to the theory agent; the fully-built RAG graph is
+   unreachable, so uploads are stored and never retrieved.
+3. **Teacher auth is one shared password.** Constant-time, read from settings,
+   and refused in production while it's the default, but no rate limiting, no
+   lockout, no accounts. A review records what changed, not who changed it.
+4. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
    Groq tokens per call.
 
 **Fragile under load:**
 
-6. **Concurrent answers to one exam session can double-grade** — the idempotency
-   check and the grading write are not atomic.
-7. **Single worker only** — the LRU cache and executor semaphore are
+5. **Single worker only** — the lesson-plan cache and executor semaphore are
    per-process. See the comment in `backend/Dockerfile`.
+6. **Duplicate backfill work across workers.** Grading writes are idempotent, but
+   two workers can both call the LLM for the same pending answer.
 
 **Smaller:**
 
-8. `GET /api/exam/session/{id}` and `/api/cache/stats` need no auth.
-9. `GET /api/history/{thread_id}` is a stub that always returns empty.
+7. `/api/cache/stats` needs no auth (it exposes only hit counts).
+8. Streamed answers are counted by call and latency; the Groq client isn't asked
+   to report token usage in streams.
