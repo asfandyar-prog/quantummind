@@ -13,12 +13,21 @@
 # No LLM needed for this decision — saves latency.
 
 import json
+import math
 import re
-from typing import TypedDict, Optional
-from langchain_core.messages import SystemMessage, HumanMessage
+from typing import Iterable, Optional, TypedDict
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 from app.core import llm
-from app.core.cache import cache
+
+
+class GradingFailed(Exception):
+    """The grader's reply had no usable scores, even after one corrective retry.
+
+    Callers record the answer with no scores (see ungraded_result) instead of
+    guessing: a made-up score would be indistinguishable from a real one in the
+    audit trail.
+    """
 
 
 # ════════════════════════════════════════════════════════════════
@@ -110,6 +119,10 @@ Rules:
 is_followup: {is_followup}"""
 
 
+def _score_text(score: Optional[float]) -> str:
+    return "not graded" if score is None else f"{score}/10"
+
+
 async def generate_question_node(state: QuestionState) -> dict:
     """1 LLM call — generates the next exam question."""
 
@@ -122,7 +135,7 @@ async def generate_question_node(state: QuestionState) -> dict:
 
     # V2/V3: AI-generated questions
     prev = "\n".join([
-        f"Q{i+1}: {qa['question']}\nA{i+1}: {qa['answer']}\nScore: {qa.get('score', 'N/A')}/10"
+        f"Q{i+1}: {qa['question']}\nA{i+1}: {qa['answer']}\nScore: {_score_text(qa.get('score'))}"
         for i, qa in enumerate(state.get("previous_qa", []))
     ]) or "None yet"
 
@@ -200,43 +213,83 @@ Return ONLY valid JSON — no explanation, no fences:
   "ideal_answer": "what a perfect answer would say (2-4 sentences)"
 }}"""
 
+GRADE_RETRY_PROMPT = (
+    "That reply was not the JSON object requested. Return ONLY the JSON object: "
+    "numeric accuracy, reasoning and clarity scores from 0 to 10, plus justification "
+    "and ideal_answer. No prose, no code fences."
+)
+
+
+SCORE_KEYS = ("accuracy", "reasoning", "clarity")
+
+
+def parse_grade(reply: str) -> Optional[dict]:
+    """The grader's scores, or None if the reply isn't usable.
+
+    Tolerates code fences and prose around the JSON object. Each dimension must be
+    present and numeric, and is clamped to 0-10. A missing or non-numeric score is
+    never replaced with a default.
+    """
+    raw = re.sub(r"```(?:json)?", "", reply)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end < start:
+        return None
+    try:
+        data = json.loads(raw[start:end + 1])
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    scores = {}
+    for key in SCORE_KEYS:
+        value = data.get(key)
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        scores[key] = min(10.0, max(0.0, number))
+
+    return {
+        **scores,
+        "justification": str(data.get("justification", "")),
+        "ideal_answer":  str(data.get("ideal_answer", "")),
+    }
+
 
 async def grade_answer_node(state: GradeState) -> dict:
-    """1 LLM call — grades answer on 3 dimensions."""
+    """1 LLM call (2 if the reply needs a corrective retry) — grades on 3 dimensions.
 
-    # Cache ideal answers per question (they don't change)
-    cached_ideal = cache.get("ideal_answer", state["question"])
+    Raises GradingFailed rather than inventing scores when the reply still isn't
+    usable after one retry that shows the model its own output.
+    """
+    prompt = HumanMessage(content=GRADE_PROMPT.format(
+        question=state["question"],
+        student_answer=state["student_answer"],
+        topic=state["topic"],
+    ))
 
     print(f"[ExamAgent/Grade] Grading answer (1 LLM call)")
+    reply = await llm.chat([prompt], call_type="exam_grade")
+    result = parse_grade(reply)
 
-    response = await llm.chat([
-        HumanMessage(content=GRADE_PROMPT.format(
-            question=state["question"],
-            student_answer=state["student_answer"],
-            topic=state["topic"],
-        ))
-    ], call_type="exam_grade")
+    if result is None:
+        print("[ExamAgent/Grade] Unusable grading reply — one corrective retry")
+        reply = await llm.chat(
+            [prompt, AIMessage(content=reply), HumanMessage(content=GRADE_RETRY_PROMPT)],
+            call_type="exam_grade",
+        )
+        result = parse_grade(reply)
 
-    try:
-        raw = re.sub(r"```(?:json)?\n?", "", response).strip().rstrip("`").strip()
-        result = json.loads(raw)
-        acc  = float(result.get("accuracy",  5.0))
-        reas = float(result.get("reasoning", 5.0))
-        clar = float(result.get("clarity",   5.0))
-        total = round((acc + reas + clar) / 3, 2)
-        just  = str(result.get("justification", ""))
-        ideal = str(result.get("ideal_answer",  ""))
+    if result is None:
+        raise GradingFailed("grader reply had no usable scores after one corrective retry")
 
-        # Cache ideal answer for this question
-        if ideal:
-            cache.set("ideal_answer", state["question"], ideal)
-
-    except Exception as e:
-        print(f"[ExamAgent/Grade] Parse error: {e}")
-        acc = reas = clar = total = 5.0
-        just  = "Could not parse grading response."
-        ideal = ""
-
+    acc, reas, clar = result["accuracy"], result["reasoning"], result["clarity"]
+    total = round((acc + reas + clar) / 3, 2)
     print(f"[ExamAgent/Grade] acc={acc} reas={reas} clar={clar} total={total}")
 
     return {
@@ -244,8 +297,8 @@ async def grade_answer_node(state: GradeState) -> dict:
         "score_reasoning": reas,
         "score_clarity":   clar,
         "score_total":     total,
-        "justification":   just,
-        "ideal_answer":    ideal,
+        "justification":   result["justification"],
+        "ideal_answer":    result["ideal_answer"],
         "is_weak":         total < 5.0,
     }
 
@@ -275,7 +328,7 @@ MAX_FOLLOWUPS      = 2     # max consecutive follow-ups per main question
 MAX_TURNS          = 10    # hard cap on total exam turns
 
 def should_generate_followup(
-    score_total:    float,
+    score_total:    Optional[float],
     version:        str,
     followup_count: int,
     turn_number:    int,
@@ -292,6 +345,9 @@ def should_generate_followup(
     - V3: follow up up to MAX_FOLLOWUPS times if score < threshold
     - Never exceed MAX_TURNS total
     """
+    if score_total is None:
+        return False, "Answer could not be graded — no follow-up"
+
     if version == "V1":
         return False, "V1 — static exam, no follow-ups"
 
@@ -390,7 +446,7 @@ async def grade_answer(
 
 
 def decide_followup(
-    score_total:    float,
+    score_total:    Optional[float],
     version:        str,
     followup_count: int,
     turn_number:    int,
@@ -401,3 +457,24 @@ def decide_followup(
         score_total, version, followup_count, turn_number, weak_areas
     )
     return {"should_followup": should, "reason": reason}
+
+
+GRADING_FAILED_NOTE = (
+    "Automatic grading failed: the grader's reply could not be read. "
+    "This answer has no score and needs teacher review."
+)
+
+
+def ungraded_result() -> dict:
+    """What callers record when grade_answer raises GradingFailed: no scores at all."""
+    return {
+        "accuracy": None, "reasoning": None, "clarity": None, "total": None,
+        "justification": GRADING_FAILED_NOTE, "ideal_answer": "",
+        "is_weak": False, "weak_areas": [],
+    }
+
+
+def average_score(scores: Iterable[Optional[float]]) -> float:
+    """Mean of the graded answers; ungraded ones (None) are left out, not zeroed."""
+    graded = [s for s in scores if s is not None]
+    return round(sum(graded) / len(graded), 2) if graded else 0.0

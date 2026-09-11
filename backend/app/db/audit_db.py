@@ -84,6 +84,13 @@ async def end_session(session_id: str, avg_score: float, total_turns: int) -> No
 # TURN OPERATIONS — one transaction: completed turn + in-flight/completion
 # ════════════════════════════════════════════════════════════════
 
+def _mean_score(accuracy, reasoning, clarity) -> Optional[float]:
+    """Mean of the three dimensions, or None for an answer that couldn't be graded."""
+    if accuracy is None or reasoning is None or clarity is None:
+        return None
+    return round((accuracy + reasoning + clarity) / 3, 2)
+
+
 def _make_turn(
     session_id:       str,
     turn_number:      int,
@@ -96,7 +103,7 @@ def _make_turn(
     ideal_answer:     str,
     is_followup:      bool,
 ) -> ExamTurn:
-    score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    score_total = _mean_score(score_accuracy, score_reasoning, score_clarity)
     return ExamTurn(
         turn_id=str(uuid.uuid4()),
         session_id=session_id,
@@ -178,7 +185,7 @@ async def finalize_grade(
     """Backfill a pending turn's grade. Idempotent: the conditional UPDATE only
     affects a row that is still graded=false, so exactly one worker can claim it.
     Returns True iff this call claimed (graded) the turn."""
-    score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    score_total = _mean_score(score_accuracy, score_reasoning, score_clarity)
     async with get_sessionmaker()() as session:
         result = await session.execute(
             update(ExamTurn)
@@ -622,8 +629,13 @@ async def get_research_stats() -> dict:
             "FROM exam_turns WHERE score_total < 5"
         ))).mappings().first()
 
+        ungradable = (await conn.execute(text(
+            "SELECT COUNT(*) FROM exam_turns WHERE graded AND score_total IS NULL"
+        ))).scalar()
+
     return {
         "sessions_by_version":   [_conv(r) for r in version_counts],
         "grading_agreement":     _conv(agreement) if agreement else {},
         "weak_answer_detection": _conv(weak_answers) if weak_answers else {},
+        "ungradable_answers":    ungradable,
     }

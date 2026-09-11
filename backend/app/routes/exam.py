@@ -5,7 +5,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from app.agents.exam_agent import generate_question, grade_answer, decide_followup
+from app.agents.exam_agent import (
+    generate_question, grade_answer, decide_followup,
+    GradingFailed, ungraded_result, average_score,
+)
 from app.db.audit_db import (
     create_session, end_session, set_in_flight, advance_exam, complete_exam,
     create_pending_turn, get_pending_turn, get_session_row, StaleTurn,
@@ -136,14 +139,18 @@ async def submit_answer(req: AnswerRequest):
     is_followup_for_turn = state["followup_count"] > 0
 
     try:
-        # Grade — 1 LLM call
-        grading = await grade_answer(topic, question, req.student_answer)
+        # Grade — 1 LLM call (2 if the reply needs a corrective retry)
+        try:
+            grading = await grade_answer(topic, question, req.student_answer)
+        except GradingFailed:
+            grading = ungraded_result()  # recorded with no scores, never a guessed one
 
         # Update the working state. The turn is appended now so it feeds the next
         # question's context (previous_qa uses question/answer/score, not turn_id).
         new_turn = {"question": question, "answer": req.student_answer, "score": grading["total"], "turn_id": None}
         state["turns"].append(new_turn)
-        state["total_score"] += grading["total"]
+        if grading["total"] is not None:
+            state["total_score"] += grading["total"]
         for area in grading["weak_areas"]:
             if area not in state["weak_areas"]:
                 state["weak_areas"].append(area)
@@ -157,7 +164,10 @@ async def submit_answer(req: AnswerRequest):
 
         # Feedback
         t = grading["total"]
-        feedback = "Excellent answer!" if t >= 8 else "Good answer, some areas could be more precise." if t >= 6 else "Partial understanding. Let's explore further." if t >= 4 else "This needs more work. Let's try a follow-up."
+        if t is None:
+            feedback = "Your answer is saved but couldn't be graded automatically. A teacher will review it."
+        else:
+            feedback = "Excellent answer!" if t >= 8 else "Good answer, some areas could be more precise." if t >= 6 else "Partial understanding. Let's explore further." if t >= 4 else "This needs more work. Let's try a follow-up."
 
         next_question = None
         is_followup   = False
@@ -212,7 +222,7 @@ async def submit_answer(req: AnswerRequest):
 
         else:
             exam_complete = True
-            avg = round(state["total_score"] / len(state["turns"]), 2)
+            avg = average_score(t["score"] for t in state["turns"])
             turn_id = await complete_exam(
                 session_id=req.session_id, turn_number=turn_num,
                 question=question, student_answer=req.student_answer,
@@ -228,7 +238,8 @@ async def submit_answer(req: AnswerRequest):
             "status": "graded",
             "awaiting_grade": False,
             "turn_id": turn_id,
-            "scores": {"accuracy": grading["accuracy"], "reasoning": grading["reasoning"], "clarity": grading["clarity"], "total": grading["total"]},
+            "scores": None if grading["total"] is None else {"accuracy": grading["accuracy"], "reasoning": grading["reasoning"], "clarity": grading["clarity"], "total": grading["total"]},
+            "needs_review": grading["total"] is None,
             "justification": grading["justification"],
             "ideal_answer": grading["ideal_answer"],
             "feedback": feedback,
@@ -268,7 +279,7 @@ async def end_exam_early(req: dict):
     if state is None:
         raise HTTPException(404, "Session not found.")
     total = len(state["turns"])
-    avg   = round(state["total_score"] / total, 2) if total > 0 else 0.0
+    avg   = average_score(t["score"] for t in state["turns"])
     await end_session(session_id, avg, total)   # Postgres FIRST
     await clear_active(session_id)               # THEN drop Redis
     return {"status": "ended", "avg_score": avg, "total_turns": total}
