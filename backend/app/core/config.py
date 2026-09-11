@@ -68,8 +68,9 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
-    # "development" enables detailed error messages and auto-reload.
-    # "production" disables these for security.
+    # "development" serves the interactive API docs at /docs. "production" hides
+    # them and turns on the fail-fast checks below: no subprocess executor and no
+    # default teacher password. Auto-reload is a uvicorn flag, not this setting.
 
     cors_allow_origin_regex: Optional[str] = None
     # Optional second CORS rule, matched in FULL against the request Origin, for

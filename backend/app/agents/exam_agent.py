@@ -2,15 +2,18 @@
 #
 # LangGraph AI Examiner — V1/V2/V3 adaptive questioning
 #
-# Three graphs:
-#   1. QuestionGraph  — generates the next question (1 LLM call)
-#   2. GradeGraph     — grades answer + generates ideal (1 LLM call)
-#   3. FollowUpGraph  — decides if follow-up needed (DETERMINISTIC — 0 LLM calls)
+# Two single-node graphs and one plain function:
+#   1. QuestionGraph   — the next question (V1: static bank, 0 LLM calls;
+#                        V2/V3: 1 LLM call)
+#   2. GradeGraph      — scores the answer and writes an ideal one (1 LLM call,
+#                        2 if the reply needs a corrective retry)
+#   3. decide_followup — a plain function, not a graph (DETERMINISTIC — 0 LLM calls)
 #
-# The follow-up decision is deterministic:
-#   avg_score < 5.0 → generate follow-up question
-#   avg_score >= 5.0 → move to next question
-# No LLM needed for this decision — saves latency.
+# The follow-up decision uses the score of the answer just given (the mean of its
+# three dimensions), not the session average:
+#   score < 5.0  → follow-up question (V2: at most 1 per main question, V3: 2)
+#   score >= 5.0 → move to the next question
+# No LLM needed for this decision — saves latency and keeps it reproducible.
 
 import json
 import math
@@ -323,7 +326,7 @@ def get_grade_graph():
 # This is the core of the adaptive system
 # ════════════════════════════════════════════════════════════════
 
-FOLLOWUP_THRESHOLD = 5.0   # avg score below this triggers a follow-up
+FOLLOWUP_THRESHOLD = 5.0   # an answer scoring below this triggers a follow-up
 MAX_FOLLOWUPS      = 2     # max consecutive follow-ups per main question
 MAX_TURNS          = 10    # hard cap on total exam turns
 

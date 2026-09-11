@@ -1,13 +1,11 @@
 import React from 'react'
-import { useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { Navigate, useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import useAppState from '@/hooks/useAppState'
 import Sidebar from '@/components/Sidebar'
 import CourseSidebar from '@/components/CourseSidebar'
 import ChatPanel from '@/components/ChatPanel'
 import CoursePanel from '@/components/CoursePanel'
-import CircuitVisualizer from '@/components/CircuitVisualizer'
-import ConceptCards from '@/components/ConceptCards'
 import CodeEditor from '@/components/CodeEditor'
 import GuidedPanel from '@/components/GuidedPanel'
 import ExamMode from '@/components/ExamMode'
@@ -15,12 +13,6 @@ import PracticeAssistant from '@/components/PracticeAssistant'
 import clsx from 'clsx'
 
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-
-const PANEL_TABS = [
-  { id: 'circuit',  label: 'Circuit'  },
-  { id: 'concepts', label: 'Concepts' },
-  { id: 'code',     label: 'Code'     },
-]
 
 const MODE_META = {
   theory:   { label: 'Theory Mode',   color: '#007AFF', bg: 'rgba(0,122,255,0.07)'   },
@@ -32,8 +24,6 @@ const MODE_META = {
 export default function MainApp() {
   const navigate         = useNavigate()
   const mode             = useAppState(s => s.mode)
-  const activePanel      = useAppState(s => s.activePanel)
-  const setPanel         = useAppState(s => s.setActivePanel)
   const activeTopicId    = useAppState(s => s.activeTopicId)
   const setActiveTopicId = useAppState(s => s.setActiveTopicId)
   const activeWeek       = useAppState(s => s.activeWeek)
@@ -46,6 +36,9 @@ export default function MainApp() {
   const isExam     = mode === 'exam'
   const isPractice = mode === 'practice'
   const isCourse   = mode === 'course'
+
+  // No mode chosen (a direct visit or a refresh on /app): pick one first.
+  if (!mode) return <Navigate to="/select" replace />
 
   function handleSelectTopic(topicId, week) {
     setActiveTopicId(topicId)
@@ -122,37 +115,6 @@ export default function MainApp() {
             <div style={{ flex:1, overflow:'hidden', background:'#FFFFFF', borderRight: isTheory ? 'none' : '1px solid rgba(0,0,0,0.07)' }}>
               <ChatPanel />
             </div>
-
-            <AnimatePresence>
-              {!isTheory && (
-                <motion.div
-                  key="right-panel"
-                  style={{ width:'320px', minWidth:'320px', display:'flex', flexDirection:'column', overflow:'hidden', background:'#FFFFFF' }}
-                  initial={{ x:40, opacity:0 }} animate={{ x:0, opacity:1 }} exit={{ x:40, opacity:0 }}
-                  transition={{ duration:0.35, ease:[0.16,1,0.3,1] }}
-                >
-                  <div style={{ display:'flex', background:'#F7F7FA', borderBottom:'1px solid rgba(0,0,0,0.07)', padding:'0 4px', flexShrink:0 }}>
-                    {PANEL_TABS.map(tab => {
-                      const active = activePanel === tab.id
-                      return (
-                        <button key={tab.id} onClick={() => setPanel(tab.id)} style={{ flex:1, padding:'12px 8px', fontSize:'11px', fontWeight: active ? 600 : 400, fontFamily:FONT, letterSpacing:'0.06em', textTransform:'uppercase', color: active ? meta.color : '#AEAEB2', background:'transparent', border:'none', borderBottom:`2px solid ${active ? meta.color : 'transparent'}`, cursor:'pointer', transition:'all 0.18s', outline:'none' }}>
-                          {tab.label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                  <div style={{ flex:1, overflowY:'auto', padding:'20px 16px' }}>
-                    <AnimatePresence mode="wait">
-                      <motion.div key={activePanel} initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0 }} transition={{ duration:0.2 }}>
-                        {activePanel === 'circuit'  && <CircuitVisualizer />}
-                        {activePanel === 'concepts' && <ConceptCards />}
-                        {activePanel === 'code'     && <CodePanel />}
-                      </motion.div>
-                    </AnimatePresence>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </motion.div>
         )}
       </div>
@@ -242,38 +204,6 @@ function ResizableSplit({ left, right }) {
       {/* Right panel — AI Assistant */}
       <div style={{ flex:1, overflow:'hidden', minWidth:'20%' }}>
         {right}
-      </div>
-    </div>
-  )
-}
-
-function CodePanel() {
-  const CODE = `# Bell State — Qiskit
-from qiskit import QuantumCircuit
-from qiskit_aer import AerSimulator
-
-qc = QuantumCircuit(2, 2)
-qc.h(0)
-qc.cx(0, 1)
-qc.measure([0, 1], [0, 1])
-
-sim = AerSimulator()
-job = sim.run(qc, shots=1024)
-counts = job.result().get_counts()
-print(counts)`
-
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:'12px', fontFamily:FONT }}>
-      <pre style={{ background:'#1A1A2E', color:'#CDD6F4', fontFamily:'SF Mono, monospace', fontSize:'12px', lineHeight:'1.75', padding:'16px', borderRadius:'12px', overflowX:'auto', margin:0 }}>
-        {CODE}
-      </pre>
-      <div style={{ display:'flex', gap:'8px' }}>
-        <button style={{ flex:1, padding:'10px', borderRadius:'10px', background:'linear-gradient(135deg, #007AFF, #32ADE6)', color:'#fff', fontSize:'13px', fontWeight:600, border:'none', cursor:'pointer', fontFamily:FONT }}>▶  Run</button>
-        <button style={{ padding:'10px 18px', borderRadius:'10px', background:'transparent', color:'#6C6C70', fontSize:'13px', border:'1px solid rgba(0,0,0,0.10)', cursor:'pointer', fontFamily:FONT }}>Copy</button>
-      </div>
-      <div style={{ background:'#F9F9FB', border:'1px solid rgba(0,0,0,0.07)', borderRadius:'10px', padding:'14px 16px' }}>
-        <div style={{ fontSize:'10px', fontWeight:600, letterSpacing:'0.1em', textTransform:'uppercase', color:'#007AFF', marginBottom:'8px' }}>Output</div>
-        <div style={{ fontFamily:'SF Mono, monospace', fontSize:'12px', color:'#34C759' }}>{`{'00': 512, '11': 512}`}</div>
       </div>
     </div>
   )

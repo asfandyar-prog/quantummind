@@ -110,9 +110,9 @@ async def run_agent(
         return await run_code_agent(user_message, chat_history, thread_id)
 
     elif agent_name == "rag":
-        # RAG agent not built yet — fall back to theory agent
-        # with a note. We'll replace this in Phase 2.
-        print("[Orchestrator] RAG agent not yet implemented, using theory agent")
+        # The RAG graph is built (rag_agent.py) but not routed yet: uploaded course
+        # material is never retrieved, and the theory agent answers instead.
+        print("[Orchestrator] RAG not routed yet, using theory agent")
         return await run_theory_agent(user_message, chat_history, thread_id)
 
     elif agent_name == "review":

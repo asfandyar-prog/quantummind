@@ -12,9 +12,9 @@ const TOPICS = [
 ]
 
 const VERSION_INFO = {
-  V1: { label: 'Static',   color: '#34C759', desc: '5 fixed questions, no adaptation' },
-  V2: { label: 'Adaptive', color: '#FF9500', desc: 'Fixed questions + follow-ups on weak answers' },
-  V3: { label: 'Dynamic',  color: '#FF3B30', desc: 'Fully adaptive — questions based on your answers' },
+  V1: { label: 'Static',   color: '#34C759', desc: '5 fixed questions, no follow-ups' },
+  V2: { label: 'Adaptive', color: '#FF9500', desc: 'AI questions, one follow-up on a weak answer' },
+  V3: { label: 'Dynamic',  color: '#FF3B30', desc: 'AI questions, up to two follow-ups on weak answers' },
 }
 
 function ScoreBar({ label, value, color }) {

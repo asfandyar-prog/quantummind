@@ -1,10 +1,10 @@
 # ── app/agents/code_agent.py ──────────────────────────────────
-# Performance: 1-2 LLM calls (1 if code runs first time, 2 if retry)
-# Reliability improvements:
-#   - Pre-validation before LLM (catches obvious issues deterministically)
+# Performance: 1-2 LLM calls (1 if the code runs first time or the sandbox is off,
+# 2 if a code error triggers the one retry)
+# Reliability:
+#   - Deprecated Qiskit syntax fixed deterministically after generation, before running
 #   - Structured prompt with explicit format contract
 #   - temperature=0.1 for maximum consistency
-#   - Parallel: generate explanation while code executes
 
 from typing import TypedDict, Annotated
 import operator
@@ -31,7 +31,6 @@ class CodeAgentState(TypedDict):
 
 # Structured prompt with explicit format contract.
 # The <format> tag creates a clear contract the model reliably follows.
-# temperature=0.1 + explicit format = ~90% first-pass success rate.
 CODE_SYSTEM = """You are QuantumMind's Code Agent — a Qiskit 1.x expert.
 
 <task>
@@ -119,8 +118,8 @@ Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
 
 
 async def execute_code(state: CodeAgentState) -> dict:
-    """Run the generated code in the sandbox seam (app.core.executor). The only
-    genuinely agentic step. Nothing runs inline here anymore."""
+    """Run the generated code in the sandbox seam (app.core.executor). Its result
+    decides whether the graph retries. Nothing runs inline here."""
     code = state.get("generated_code", "").strip()
     if not code:
         return {"execution_error": "No code generated.", "execution_unavailable": False}

@@ -44,7 +44,7 @@ async def stream_response(request: StreamRequest):
                 "theory":   "Thinking about your question…",
                 "practice": "Analyzing your code…",
                 "guided":   "Preparing your lesson…",
-                "course":   "Searching course materials…",
+                "course":   "Thinking about your question…",  # no retrieval while RAG is unrouted
             }
             progress_msg = mode_labels.get(request.mode, "Processing…")
             yield sse_event({"type": "progress", "content": progress_msg})

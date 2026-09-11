@@ -8,6 +8,8 @@
 #   - subprocess : runs on the host (INSECURE). A dev-only fallback, gated by the
 #                  Settings validator — forbidden in production, requires
 #                  ALLOW_INSECURE_EXECUTOR=true.
+#   - disabled   : runs nothing. /api/execute answers 503 and the code agent says
+#                  the code was not run.
 #
 # Code is piped to the runner via stdin (no bind mounts, no host temp files). The
 # circuit-drawing harness runs inside the runner and emits the diagram as a

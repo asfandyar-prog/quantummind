@@ -9,9 +9,8 @@ schema: timestamptz, boolean (was INTEGER 0/1), Numeric(5,2) for scores, plus
 proper foreign keys and indexes on FK columns. Includes the new in-flight
 columns on exam_sessions.
 
-UNVERIFIED: this migration has NOT been run against a real Postgres yet (no DB
-available at authoring time). Review before applying; run `alembic upgrade head`
-against Postgres to verify.
+Verified: the integration suite applies it (alembic upgrade head) to a fresh
+Postgres before every run.
 """
 from alembic import op
 import sqlalchemy as sa

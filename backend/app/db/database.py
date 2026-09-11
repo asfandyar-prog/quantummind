@@ -2,11 +2,10 @@
 # Async SQLAlchemy engine + pooled sessions (Postgres via psycopg 3).
 #
 # Replaces the per-request sqlite3.connect() in audit_db.py with one pooled
-# async engine created at startup. DORMANT in this commit — nothing imports it
-# yet; the repository + lifespan wiring land in commit 3. The engine is created
-# lazily, so importing this module never opens a connection.
+# async engine, used by audit_db and warmed by the app lifespan. The engine is
+# created lazily, so importing this module never opens a connection.
 
-from typing import AsyncIterator, Optional
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -41,14 +40,8 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
-async def get_session() -> AsyncIterator[AsyncSession]:
-    """Yield an async session. Final transaction handling lands in commit 3."""
-    async with get_sessionmaker()() as session:
-        yield session
-
-
 async def dispose_engine() -> None:
-    """Dispose the pool on shutdown (wired into the lifespan in commit 3)."""
+    """Dispose the pool on shutdown (called from the app lifespan)."""
     global _engine, _sessionmaker
     if _engine is not None:
         await _engine.dispose()
