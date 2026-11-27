@@ -6,6 +6,7 @@
 # Each file is tagged with a week number so the RAG agent can
 # retrieve only content relevant to the current lesson.
 
+import asyncio
 import os
 import json
 import tempfile
@@ -109,40 +110,21 @@ async def upload_file(
         tmp_path = tmp.name
 
     try:
-        # Load document based on file type
-        if ext == ".pdf":
-            docs = load_pdf(tmp_path)
-        elif ext == ".ipynb":
-            docs = load_notebook(tmp_path)
-        elif ext in (".py", ".md"):
-            docs = load_text(tmp_path, filename)
-        else:
-            docs = []
-
-        if not docs:
+        # Parsing, embedding (which loads the model on first use) and the Chroma
+        # write are all blocking CPU and disk work. Run them in a worker thread so
+        # one large upload doesn't stall every other request on the event loop.
+        n_chunks = await asyncio.to_thread(ingest_file, tmp_path, ext, filename, week)
+        if n_chunks == 0:
             raise HTTPException(status_code=400, detail="No text could be extracted from the file.")
 
-        # Split into chunks
-        chunks = text_splitter.split_documents(docs)
-
-        # Tag each chunk with week metadata
-        for chunk in chunks:
-            chunk.metadata["week"]     = week
-            chunk.metadata["filename"] = filename
-            chunk.metadata["source"]   = f"Week {week}: {filename}"
-
-        # Store in ChromaDB
-        vectorstore = get_vectorstore()
-        vectorstore.add_documents(chunks)
-
-        print(f"[Upload] Week {week} — {filename}: {len(chunks)} chunks stored")
+        print(f"[Upload] Week {week} — {filename}: {n_chunks} chunks stored")
 
         return JSONResponse({
             "status":   "success",
             "filename": filename,
             "week":     week,
-            "chunks":   len(chunks),
-            "message":  f"Successfully ingested {len(chunks)} chunks from {filename}",
+            "chunks":   n_chunks,
+            "message":  f"Successfully ingested {n_chunks} chunks from {filename}",
         })
 
     except HTTPException:
@@ -153,6 +135,30 @@ async def upload_file(
 
     finally:
         os.unlink(tmp_path)
+
+
+def ingest_file(path: str, ext: str, filename: str, week: int) -> int:
+    """Load, split, tag and embed one file into Chroma. Returns the chunk count
+    (0 if no text could be extracted). Blocking: call it via asyncio.to_thread."""
+    if ext == ".pdf":
+        docs = load_pdf(path)
+    elif ext == ".ipynb":
+        docs = load_notebook(path)
+    elif ext in (".py", ".md"):
+        docs = load_text(path, filename)
+    else:
+        docs = []
+    if not docs:
+        return 0
+
+    chunks = text_splitter.split_documents(docs)
+    for chunk in chunks:
+        chunk.metadata["week"]     = week
+        chunk.metadata["filename"] = filename
+        chunk.metadata["source"]   = f"Week {week}: {filename}"
+
+    get_vectorstore().add_documents(chunks)
+    return len(chunks)
 
 
 def load_pdf(path: str):
@@ -208,8 +214,7 @@ def load_text(path: str, filename: str):
 async def upload_status():
     """Returns how many documents are in the vector store."""
     try:
-        vectorstore = get_vectorstore()
-        count = vectorstore._collection.count()
+        count = await asyncio.to_thread(lambda: get_vectorstore()._collection.count())
         return {"status": "ok", "total_chunks": count, "chroma_dir": CHROMA_DIR}
     except Exception as e:
         return {"status": "error", "error": str(e)}
