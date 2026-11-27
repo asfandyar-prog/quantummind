@@ -21,6 +21,10 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from app.core.auth import require_teacher
 from app.core.config import settings
 
+import logging
+
+logger = logging.getLogger("quantummind.routes.upload")
+
 router = APIRouter()
 
 # ── ChromaDB path ─────────────────────────────────────────────
@@ -117,7 +121,7 @@ async def upload_file(
         if n_chunks == 0:
             raise HTTPException(status_code=400, detail="No text could be extracted from the file.")
 
-        print(f"[Upload] Week {week} — {filename}: {n_chunks} chunks stored")
+        logger.info(f"Week {week} — {filename}: {n_chunks} chunks stored")
 
         return JSONResponse({
             "status":   "success",
@@ -130,7 +134,7 @@ async def upload_file(
     except HTTPException:
         raise  # e.g. the 400 for a file with no extractable text, not a 500
     except Exception as e:
-        print(f"[Upload] Error: {e}")
+        logger.exception(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:

@@ -10,6 +10,10 @@ from langgraph.graph import StateGraph, END
 from app.core import llm
 from app.core.memory import get_checkpointer
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.theory")
+
 # ── STATE ─────────────────────────────────────────────────────
 class TheoryAgentState(TypedDict):
     messages:       Annotated[list[BaseMessage], operator.add]
@@ -56,7 +60,7 @@ async def generate_response(state: TheoryAgentState) -> dict:
     # The checkpointer keeps the whole thread; only the most recent turns are
     # replayed, so a long conversation can't outgrow the context window.
     messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"][-MAX_HISTORY_MESSAGES:]
-    print(f"[TheoryAgent] Generating response (1 LLM call)")
+    logger.info(f"Generating response (1 LLM call)")
     response = await llm.chat(messages, call_type="theory")
     return {
         "final_response": response,
@@ -114,6 +118,6 @@ async def stream_theory_agent(
 
     messages.append(HumanMessage(content=user_message))
 
-    print(f"[TheoryAgent] Streaming response (1 LLM call)")
+    logger.info(f"Streaming response (1 LLM call)")
     async for token in llm.stream(messages, call_type="theory"):
         yield token

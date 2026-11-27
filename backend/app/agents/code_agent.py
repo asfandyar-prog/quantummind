@@ -16,6 +16,10 @@ from app.core import llm
 from app.core import executor
 from app.core.memory import get_checkpointer
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.code")
+
 
 class CodeAgentState(TypedDict):
     messages:         Annotated[list[BaseMessage], operator.add]
@@ -100,7 +104,7 @@ Broken code:
 
 Return the same EXPLANATION/CODE/EXPECTED OUTPUT format with the fix."""))
 
-    print(f"[CodeAgent] LLM call #{state.get('retry_count', 0) + 1}")
+    logger.info(f"LLM call #{state.get('retry_count', 0) + 1}")
     response = await llm.chat(messages, call_type="code")
 
     code        = extract_code_block(response)
@@ -126,15 +130,15 @@ async def execute_code(state: CodeAgentState) -> dict:
 
     result = await executor.run_code(code, draw=False)
     if result.success:
-        print(f"[CodeAgent] Execution success ✓")
+        logger.info(f"Execution success ✓")
         return {"execution_output": result.stdout.strip(), "execution_error": "", "execution_unavailable": False}
     if result.unavailable:
         # The sandbox is switched off or missing. Not a code error, so another
         # generation can't fix it; say so in the answer instead.
-        print(f"[CodeAgent] Execution unavailable: {result.stderr}")
+        logger.info(f"Execution unavailable: {result.stderr}")
         return {"execution_output": "", "execution_error": result.stderr, "execution_unavailable": True}
     err = clean_traceback(result.stderr.strip())
-    print(f"[CodeAgent] Execution failed: {err[:60]}")
+    logger.info(f"Execution failed: {err[:60]}")
     return {"execution_output": "", "execution_error": err, "execution_unavailable": False}
 
 

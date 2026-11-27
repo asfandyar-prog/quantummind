@@ -21,6 +21,10 @@ from app.core.config import settings
 from app.core.prompts import RAG_PROMPT, build_rag_prompt
 from app.core.memory import get_checkpointer
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.rag")
+
 # ── ChromaDB setup ────────────────────────────────────────────
 # Same source of truth as routes/upload.py — see settings.chroma_dir.
 CHROMA_DIR = settings.chroma_dir
@@ -89,10 +93,10 @@ async def retrieve_context(state: RAGAgentState) -> dict:
 
         docs = retriever.invoke(last_msg)
         chunks = [doc.page_content for doc in docs]
-        print(f"[RAGAgent] retrieve_context → {len(chunks)} chunks (week {week})")
+        logger.info(f"retrieve_context → {len(chunks)} chunks (week {week})")
 
     except Exception as e:
-        print(f"[RAGAgent] ChromaDB error: {e} — using empty context")
+        logger.warning(f"ChromaDB error: {e} — using empty context")
         chunks = []
 
     return {"retrieved_chunks": chunks, "grade_feedback": ""}
@@ -131,7 +135,7 @@ the answer is from general knowledge, not the course materials."""
         messages.append(HumanMessage(content="Please improve your previous answer. Be more specific and cite the course material more directly."))
 
     answer = await llm.chat(messages, call_type="rag_generate")
-    print(f"[RAGAgent] generate_answer → {len(answer)} chars")
+    logger.info(f"generate_answer → {len(answer)} chars")
     return {"answer": answer}
 
 
@@ -163,13 +167,13 @@ Respond with ONLY: "pass" or "fail" """
     if grade not in ("pass", "fail"):
         grade = "pass"
 
-    print(f"[RAGAgent] grade_answer → {grade}")
+    logger.info(f"grade_answer → {grade}")
     return {"grade_feedback": grade}
 
 
 async def retry_node(state: RAGAgentState) -> dict:
     count = state.get("retry_count", 0) + 1
-    print(f"[RAGAgent] retry → {count}/1")
+    logger.info(f"retry → {count}/1")
     return {"retry_count": count}
 
 

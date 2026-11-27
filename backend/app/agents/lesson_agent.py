@@ -11,6 +11,10 @@ from app.core import llm
 from app.core.cache import cache
 from app.core.prompts import UNTRUSTED_DATA_RULE, delimit
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.lesson")
+
 
 # ── Deterministic code sanitizer ──────────────────────────────
 DEPRECATED_PATTERNS = [
@@ -92,10 +96,10 @@ async def generate_plan_node(state: PlanState) -> dict:
     # Check cache first — lesson plans are expensive and deterministic
     cached = cache.get("plan", state["topic"])
     if cached:
-        print(f"[LessonAgent/Plan] Cache hit for: {state['topic']}")
+        logger.info(f"Cache hit for: {state['topic']}")
         return {"plan": json.loads(cached)}
 
-    print(f"[LessonAgent/Plan] Generating plan (1 LLM call)")
+    logger.info(f"Generating plan (1 LLM call)")
     response = await llm.chat([
         SystemMessage(content=PLAN_PROMPT),
         HumanMessage(content=f"Topic: {state['topic']}"),
@@ -107,7 +111,7 @@ async def generate_plan_node(state: PlanState) -> dict:
         cache.set("plan", state["topic"], json.dumps(plan))
         return {"plan": plan}
     except Exception as e:
-        print(f"[LessonAgent/Plan] Parse failed: {e} — using fallback")
+        logger.warning(f"Parse failed: {e} — using fallback")
         return {"plan": _fallback_plan(state["topic"])}
 
 def build_plan_graph():
@@ -167,7 +171,7 @@ async def generate_step_node(state: StepState) -> dict:
         objective=step["objective"],
         teaching_points=points,
     )
-    print(f"[LessonAgent/Step] Generating step {state['step_num']} (1 LLM call)")
+    logger.info(f"Generating step {state['step_num']} (1 LLM call)")
     content = await llm.chat([
         SystemMessage(content=prompt),
         HumanMessage(content=f"Teach: {step['title']}"),
@@ -230,7 +234,7 @@ UNGRADED_FEEDBACK = "I couldn't grade that answer automatically. Please try agai
 
 
 async def grade_node(state: GradeState) -> dict:
-    print(f"[LessonAgent/Grade] Grading (1 LLM call)")
+    logger.info(f"Grading (1 LLM call)")
     response = await llm.chat(
         grade_messages(state["question"], state["correct_answer"], state["student_answer"]),
         call_type="lesson_grade",
@@ -242,7 +246,7 @@ async def grade_node(state: GradeState) -> dict:
             raise ValueError("grader reply is not a JSON object")
     except ValueError:
         # Fail closed: an answer we couldn't grade is never a pass.
-        print("[LessonAgent/Grade] Unreadable grader reply — not passing the answer")
+        logger.warning("Unreadable grader reply — not passing the answer")
         return {"passed": False, "feedback": UNGRADED_FEEDBACK}
     return {
         # Only a real JSON true passes; the strings "false" or "yes" do not.

@@ -12,6 +12,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from app.agents.orchestrator import stream_agent
 
+import logging
+
+logger = logging.getLogger("quantummind.routes.stream")
+
 router = APIRouter()
 
 
@@ -67,7 +71,7 @@ async def stream_response(request: StreamRequest):
             yield sse_event({"type": "done", "token_count": token_count})
 
         except Exception as e:
-            print(f"[/stream] Error: {e}")
+            logger.exception(f"Error: {e}")
             yield sse_event({"type": "error", "content": str(e)})
 
     return StreamingResponse(

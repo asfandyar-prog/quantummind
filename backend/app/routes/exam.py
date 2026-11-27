@@ -17,6 +17,10 @@ from app.core.auth import verify_teacher
 from app.core.exam_state import save_active, load_active, clear_active
 from app.core.llm_errors import LLMUnavailable, LLMBusy
 
+import logging
+
+logger = logging.getLogger("quantummind.routes.exam")
+
 router = APIRouter()
 
 
@@ -60,7 +64,7 @@ async def start_exam(req: StartRequest):
     }
     await save_active(session_id, state)
 
-    print(f"[ExamRoute] Started: {session_id} | {req.student_name} | {req.topic} | {req.version}")
+    logger.info(f"Started: {session_id} | {req.topic} | {req.version}")  # no student name in logs
     return {"session_id": session_id, "question": question, "turn_number": 1, "version": req.version}
 
 

@@ -68,6 +68,7 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
+    log_level: str = "INFO"   # quantummind.* loggers: DEBUG | INFO | WARNING | ERROR
     # "development" serves the interactive API docs at /docs. "production" hides
     # them and turns on the fail-fast checks below: no subprocess executor and no
     # default teacher password. Auto-reload is a uvicorn flag, not this setting.

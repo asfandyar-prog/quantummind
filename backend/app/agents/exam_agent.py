@@ -24,6 +24,10 @@ from langgraph.graph import StateGraph, END
 from app.core import llm
 from app.core.prompts import UNTRUSTED_DATA_RULE, delimit
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.exam")
+
 
 class GradingFailed(Exception):
     """The grader's reply had no usable scores, even after one corrective retry.
@@ -134,7 +138,7 @@ async def generate_question_node(state: QuestionState) -> dict:
     if state["version"] == "V1":
         questions = get_static_questions(state["topic"])
         idx = min(state["turn_number"] - 1, len(questions) - 1)
-        print(f"[ExamAgent/Q] V1 static question #{state['turn_number']}")
+        logger.info(f"V1 static question #{state['turn_number']}")
         return {"question": questions[idx]}
 
     # V2/V3: AI-generated questions
@@ -154,7 +158,7 @@ async def generate_question_node(state: QuestionState) -> dict:
         is_followup=state["is_followup"],
     )
 
-    print(f"[ExamAgent/Q] {state['version']} question #{state['turn_number']} (1 LLM call)")
+    logger.info(f"{state['version']} question #{state['turn_number']} (1 LLM call)")
     question = await llm.chat([HumanMessage(content=prompt)], call_type="exam_question")
     return {"question": question.strip()}
 
@@ -287,12 +291,12 @@ async def grade_answer_node(state: GradeState) -> dict:
     """
     prompt = grade_messages(state["topic"], state["question"], state["student_answer"])
 
-    print(f"[ExamAgent/Grade] Grading answer (1 LLM call)")
+    logger.info(f"Grading answer (1 LLM call)")
     reply = await llm.chat(prompt, call_type="exam_grade")
     result = parse_grade(reply)
 
     if result is None:
-        print("[ExamAgent/Grade] Unusable grading reply — one corrective retry")
+        logger.warning("Unusable grading reply — one corrective retry")
         reply = await llm.chat(
             [*prompt, AIMessage(content=reply), HumanMessage(content=GRADE_RETRY_PROMPT)],
             call_type="exam_grade",
@@ -304,7 +308,7 @@ async def grade_answer_node(state: GradeState) -> dict:
 
     acc, reas, clar = result["accuracy"], result["reasoning"], result["clarity"]
     total = round((acc + reas + clar) / 3, 2)
-    print(f"[ExamAgent/Grade] acc={acc} reas={reas} clar={clar} total={total}")
+    logger.info(f"acc={acc} reas={reas} clar={clar} total={total}")
 
     return {
         "score_accuracy":  acc,

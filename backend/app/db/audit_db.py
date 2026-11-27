@@ -21,6 +21,10 @@ from sqlalchemy.exc import IntegrityError
 from app.db.database import get_engine, get_sessionmaker
 from app.db.models import ExamSession, ExamTurn, TeacherReview
 
+import logging
+
+logger = logging.getLogger("quantummind.db")
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -70,7 +74,7 @@ async def create_session(
             followup_count=0,
         ))
         await session.commit()
-    print(f"[AuditDB] Session created: {session_id} | {student_name} | {topic} | {version}")
+    logger.info(f"Session created: {session_id} | {topic} | {version}")  # no student name in logs
     return session_id
 
 
@@ -88,7 +92,7 @@ async def end_session(session_id: str, avg_score: float, total_turns: int) -> No
             )
         )
         await session.commit()
-    print(f"[AuditDB] Session ended: {session_id} | avg={avg_score} | turns={total_turns}")
+    logger.info(f"Session ended: {session_id} | avg={avg_score} | turns={total_turns}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -181,7 +185,7 @@ async def create_pending_turn(
         except IntegrityError as exc:
             await session.rollback()
             raise StaleTurn(f"turn {turn_number} of {session_id} is already recorded") from exc
-    print(f"[AuditDB] Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
+    logger.info(f"Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
     return turn_id
 
 
@@ -213,7 +217,7 @@ async def finalize_grade(
         )
         await session.commit()
     claimed = result.rowcount == 1
-    print(f"[AuditDB] finalize_grade {turn_id}: {'claimed' if claimed else 'already graded'}")
+    logger.info(f"finalize_grade {turn_id}: {'claimed' if claimed else 'already graded'}")
     return claimed
 
 
@@ -367,7 +371,7 @@ async def set_in_flight(
             )
         )
         await session.commit()
-    print(f"[AuditDB] In-flight set: {session_id} | turn={current_turn_number}")
+    logger.info(f"In-flight set: {session_id} | turn={current_turn_number}")
 
 
 async def _add_turn_if_advanced(session, update_result, turn: ExamTurn) -> None:
@@ -429,7 +433,7 @@ async def advance_exam(
             )
         )
         await _add_turn_if_advanced(session, result, turn)
-    print(f"[AuditDB] Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
+    logger.info(f"Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
     return turn.turn_id
 
 
@@ -475,7 +479,7 @@ async def complete_exam(
             )
         )
         await _add_turn_if_advanced(session, result, turn)
-    print(f"[AuditDB] Turn logged + completed: {turn.turn_id} | avg={avg_score}")
+    logger.info(f"Turn logged + completed: {turn.turn_id} | avg={avg_score}")
     return turn.turn_id
 
 
@@ -551,7 +555,7 @@ async def log_teacher_review(
             action=action,
         ))
         await session.commit()
-    print(f"[AuditDB] Teacher review: {action} | delta_acc={delta_accuracy}")
+    logger.info(f"Teacher review: {action} | delta_acc={delta_accuracy}")
     return review_id
 
 

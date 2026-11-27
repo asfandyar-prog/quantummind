@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field
 
 from app.agents.orchestrator import run_agent
 
+import logging
+
+logger = logging.getLogger("quantummind.routes.chat")
+
 
 # ── Request / Response models ─────────────────────────────────
 # These Pydantic models do three things simultaneously:
@@ -105,7 +109,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         # Catch ALL exceptions so the server never returns a raw 500 error.
         # Raw 500s expose stack traces to the frontend — a security risk.
         # HTTPException gives a clean JSON error response instead.
-        print(f"[/chat] Error: {e}")
+        logger.exception(f"Error: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Agent error: {str(e)}"

@@ -14,6 +14,10 @@ from app.core.prompts import ORCHESTRATOR_PROMPT
 from app.agents.theory_agent import run_theory_agent, stream_theory_agent
 from app.agents.code_agent import run_code_agent, stream_code_agent
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.router")
+
 
 # Valid agent names — used to validate the LLM's routing decision
 VALID_AGENTS = {"theory", "code", "rag", "review"}
@@ -54,16 +58,16 @@ async def route(user_message: str) -> str:
 
         if agent not in VALID_AGENTS:
             # LLM returned a valid JSON but with an unknown agent name
-            print(f"[Orchestrator] Unknown agent '{agent}', falling back to '{DEFAULT_AGENT}'")
+            logger.warning(f"Unknown agent '{agent}', falling back to '{DEFAULT_AGENT}'")
             return DEFAULT_AGENT
 
-        print(f"[Orchestrator] Routing to '{agent}': {reason}")
+        logger.info(f"Routing to '{agent}': {reason}")
         return agent
 
     except json.JSONDecodeError:
         # LLM didn't return valid JSON — this can happen occasionally
-        print(f"[Orchestrator] Failed to parse routing decision: {raw_response}")
-        print(f"[Orchestrator] Falling back to '{DEFAULT_AGENT}'")
+        logger.warning(f"Failed to parse routing decision: {raw_response}")
+        logger.warning(f"Falling back to '{DEFAULT_AGENT}'")
         return DEFAULT_AGENT
 
 
@@ -86,12 +90,12 @@ async def pick_workflow(user_message: str, mode: str) -> str:
     labels the message and WORKFLOW_FOR_LABEL maps the label.
     """
     if mode == "practice":
-        print("[Orchestrator] Practice mode — forcing route to 'code'")
+        logger.info("Practice mode — forcing route to 'code'")
         return "code"
     label = await route(user_message)
     workflow = WORKFLOW_FOR_LABEL.get(label, DEFAULT_AGENT)
     if workflow != label:
-        print(f"[Orchestrator] '{label}' has no workflow of its own, using '{workflow}'")
+        logger.info(f"'{label}' has no workflow of its own, using '{workflow}'")
     return workflow
 
 

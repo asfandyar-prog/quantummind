@@ -8,6 +8,10 @@ import time
 from collections import OrderedDict
 from typing import Optional
 
+import logging
+
+logger = logging.getLogger("quantummind.cache")
+
 
 class LRUCache:
     """
@@ -46,7 +50,7 @@ class LRUCache:
         # Move to end (most recently used)
         self._cache.move_to_end(key)
         self._hits += 1
-        print(f"[Cache] HIT {namespace} — total hits: {self._hits}")
+        logger.info(f"HIT {namespace} — total hits: {self._hits}")
         return value
 
     def set(self, namespace: str, content: str, value: str) -> None:
