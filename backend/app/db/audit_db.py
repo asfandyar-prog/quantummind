@@ -47,8 +47,15 @@ class StaleTurn(Exception):
 # SESSION OPERATIONS
 # ════════════════════════════════════════════════════════════════
 
-async def create_session(student_name: str, topic: str, version: str) -> str:
-    """Create a new exam session. Returns session_id."""
+async def create_session(
+    student_name: str, topic: str, version: str, first_question: Optional[str] = None,
+) -> str:
+    """Create a new exam session. Returns session_id.
+
+    With first_question, the session is created already holding its in-flight
+    question (turn 1), in the same INSERT, so an active session never exists
+    without a question to answer.
+    """
     session_id = str(uuid.uuid4())
     async with get_sessionmaker()() as session:
         session.add(ExamSession(
@@ -57,6 +64,10 @@ async def create_session(student_name: str, topic: str, version: str) -> str:
             topic=topic,
             version=version,
             started_at=_now(),
+            current_question=first_question,
+            current_turn_number=1,
+            current_is_followup=False,
+            followup_count=0,
         ))
         await session.commit()
     print(f"[AuditDB] Session created: {session_id} | {student_name} | {topic} | {version}")

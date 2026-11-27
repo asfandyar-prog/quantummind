@@ -9,7 +9,7 @@ from app.agents.exam_agent import (
     GradingFailed, ungraded_result, average_score,
 )
 from app.db.audit_db import (
-    create_session, end_session, set_in_flight, advance_exam, complete_exam,
+    create_session, end_session, advance_exam, complete_exam,
     create_pending_turn, get_pending_turn, get_session_row, get_turn, StaleTurn,
     log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
 )
@@ -35,22 +35,20 @@ async def start_exam(req: StartRequest):
     if req.version not in ("V1", "V2", "V3"):
         raise HTTPException(400, "version must be V1, V2, or V3")
 
-    session_id = await create_session(req.student_name, req.topic, req.version)
+    # The first question comes BEFORE any write. If the LLM is down, nothing is
+    # stored and the student gets a 503 to retry, instead of an empty "active"
+    # session that no one can answer and that clutters the teacher dashboard.
+    try:
+        question = await generate_question(
+            topic=req.topic, version=req.version,
+            turn_number=1, previous_qa=[], is_followup=False,
+        )
+    except (LLMUnavailable, LLMBusy):
+        raise HTTPException(503, "The examiner is unavailable right now. Please try again in a minute.")
 
-    question = await generate_question(
-        topic=req.topic, version=req.version,
-        turn_number=1, previous_qa=[], is_followup=False,
-    )
-
-    # Postgres FIRST: the in-flight question is durable before we respond, so a
-    # restart immediately after start still knows the current question.
-    await set_in_flight(
-        session_id,
-        current_question=question,
-        current_turn_number=1,
-        current_is_followup=False,
-        followup_count=0,
-    )
+    # Postgres FIRST, in one INSERT: the session and its in-flight question are
+    # durable together before we respond.
+    session_id = await create_session(req.student_name, req.topic, req.version, first_question=question)
 
     # THEN the Redis hot copy.
     state = {
