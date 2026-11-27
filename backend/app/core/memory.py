@@ -21,6 +21,10 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from app.core.config import settings
 
+import logging
+
+logger = logging.getLogger("quantummind.memory")
+
 _pool: Optional[AsyncConnectionPool] = None
 _checkpointer: Optional[AsyncPostgresSaver] = None
 
@@ -48,7 +52,7 @@ async def init_checkpointer() -> AsyncPostgresSaver:
     await _pool.open()
     _checkpointer = AsyncPostgresSaver(_pool)
     await _checkpointer.setup()  # idempotent: ensures checkpoint tables exist
-    print("[Memory] AsyncPostgresSaver checkpointer ready")
+    logger.info("AsyncPostgresSaver checkpointer ready")
     return _checkpointer
 
 

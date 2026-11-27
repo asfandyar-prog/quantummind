@@ -97,6 +97,9 @@ def _build_client(model: str, temperature: float, max_tokens: Optional[int],
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
+        # _run_resilient (tenacity) owns retries. Left at its default the openai SDK
+        # would also retry twice inside every attempt: up to 12 requests per call.
+        max_retries=0,
         api_key=_resolve_api_key(),
         base_url=_resolve_base_url(),
     )
@@ -108,7 +111,10 @@ def _resolve_timeout(call_type: Optional[str]) -> float:
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """True for errors worth retrying: timeouts, dropped connections, 429, 5xx."""
+    """True for errors worth retrying: timeouts, dropped connections, 408/409/429, 5xx.
+
+    The same set the openai SDK would retry itself, now that its retries are off.
+    """
     if isinstance(exc, asyncio.TimeoutError):
         return True
     import openai
@@ -120,7 +126,8 @@ def _is_transient(exc: BaseException) -> bool:
     )):
         return True
     if isinstance(exc, openai.APIStatusError):
-        return getattr(exc, "status_code", 0) >= 500
+        status = getattr(exc, "status_code", 0)
+        return status in (408, 409) or status >= 500
     return False
 
 
@@ -206,7 +213,11 @@ async def _account(call_type, model, message, latency_ms: int, outcome: str) -> 
 
 def _schedule_accounting(coro) -> None:
     """Run accounting as a tracked background task so it never blocks the response."""
-    task = asyncio.create_task(coro)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:  # no running loop, e.g. a stream generator closed at shutdown
+        coro.close()
+        return
     _accounting_tasks.add(task)
     task.add_done_callback(_accounting_tasks.discard)
 
@@ -258,27 +269,47 @@ async def stream(
     Transient failures retry only BEFORE the first token (retrying after tokens
     have shipped would double-emit); once streaming, a failure ends the stream
     with LLMUnavailable. The client-level timeout bounds hangs.
+
+    Every stream is accounted like chat(): latency and outcome always, token counts
+    when the provider includes usage in the stream.
     """
     model_name, temp = _resolve_params(call_type, temperature, model)
     timeout = _resolve_timeout(call_type)
     client = _build_client(model_name, temp, max_tokens, timeout=timeout)
-    # Hold a global concurrency slot for the whole stream (released on completion
-    # or when the consumer closes the generator). LLMBusy on acquire propagates.
-    async with llm_limiter.slot():
-        attempt = 0
-        while True:
-            attempt += 1
-            yielded = False
-            try:
-                async for chunk in client.astream(messages):
-                    if chunk.content:
-                        yielded = True
-                        yield chunk.content
-                return
-            except Exception as exc:
-                if not yielded and _is_transient(exc) and attempt < settings.llm_max_attempts:
-                    await asyncio.sleep(_backoff_delay(attempt))
-                    continue
-                if _is_transient(exc):
-                    raise LLMUnavailable(f"LLM unavailable during stream: {exc}") from exc
-                raise
+    start = time.monotonic()
+    final = None        # every chunk added together; carries usage_metadata when sent
+    outcome = "error"
+    try:
+        # Hold a global concurrency slot for the whole stream (released on completion
+        # or when the consumer closes the generator). LLMBusy on acquire propagates.
+        async with llm_limiter.slot():
+            attempt = 0
+            while True:
+                attempt += 1
+                yielded = False
+                final = None
+                try:
+                    async for chunk in client.astream(messages):
+                        final = chunk if final is None else final + chunk
+                        if chunk.content:
+                            yielded = True
+                            yield chunk.content
+                    outcome = "ok"
+                    return
+                except Exception as exc:
+                    if not yielded and _is_transient(exc) and attempt < settings.llm_max_attempts:
+                        await asyncio.sleep(_backoff_delay(attempt))
+                        continue
+                    if _is_transient(exc):
+                        outcome = "unavailable"
+                        raise LLMUnavailable(f"LLM unavailable during stream: {exc}") from exc
+                    raise
+    except LLMBusy:
+        outcome = "busy"
+        raise
+    except (GeneratorExit, asyncio.CancelledError):
+        outcome = "cancelled"  # the client went away mid-stream
+        raise
+    finally:
+        _schedule_accounting(_account(call_type, model_name, final,
+                                      int((time.monotonic() - start) * 1000), outcome))

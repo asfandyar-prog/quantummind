@@ -61,7 +61,7 @@ export default function CodeEditor() {
       const res = await fetch(`${BACKEND}/api/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: currentCode, shots: 1024 }),
+        body: JSON.stringify({ code: currentCode }),
       })
 
       // The backend answers 503 when code execution is switched off for this

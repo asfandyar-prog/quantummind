@@ -11,7 +11,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy import text
+import logging
+
 from app.core.config import settings
+from app.core.logging_setup import configure_logging, RequestIdMiddleware
+
+# Before anything logs: JSON lines on stdout for every quantummind.* logger.
+configure_logging(settings.log_level)
+logger = logging.getLogger("quantummind.app")
 
 
 @asynccontextmanager
@@ -23,35 +30,31 @@ async def lifespan(app: FastAPI):
     from app.db.database import get_engine, dispose_engine
     async with get_engine().connect() as conn:
         await conn.execute(text("SELECT 1"))
-    print("[DB] Postgres async pool ready")
+    logger.info("Postgres async pool ready")
 
     # Warm the shared Redis active-exam store and fail fast if unreachable.
     from app.db.redis_client import get_redis, close_redis
     await get_redis().ping()
-    print("[Redis] active-exam store ready")
+    logger.info("Redis active-exam store ready")
 
     # Concurrency limiter is a stateless, self-healing Redis sorted-set — no init
     # needed; it shares the pool above. Log the active limit for visibility.
-    print(f"[LLM] concurrency limit = {settings.llm_max_concurrency} "
-          f"(acquire timeout {settings.llm_acquire_timeout_seconds}s)")
+    logger.info(f"LLM concurrency limit = {settings.llm_max_concurrency} "
+                f"(acquire timeout {settings.llm_acquire_timeout_seconds}s)")
 
     # Backfill worker: grades/advances any answers persisted while the LLM was
     # down. Started after DB+Redis are up; stopped first on shutdown.
     from app.core import grading_backfill
     grading_backfill.start()
-    print("[Backfill] grading worker started")
 
-    print("\n🚀 QuantumMind backend starting...")
-    print(f"   Environment : {settings.app_env}")
-    print(f"   Model       : {settings.llm_model}")
-    print(f"   Frontend URL: {settings.frontend_url}")
-    print(f"   Docs        : http://localhost:8000/docs\n")
+    logger.info(f"QuantumMind backend started: env={settings.app_env} model={settings.llm_model} "
+                f"frontend={settings.frontend_url} log_level={settings.log_level}")
     yield
     await grading_backfill.stop()
     await close_redis()
     await dispose_engine()
     await close_checkpointer()
-    print("\n👋 QuantumMind backend shutting down...")
+    logger.info("QuantumMind backend shut down")
 
 
 app = FastAPI(
@@ -68,6 +71,7 @@ app = FastAPI(
 # allow_origin_regex is an OR with allow_origins and is only consulted when the
 # exact-match list misses; leaving it unset keeps the strict single-origin
 # behaviour.
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],

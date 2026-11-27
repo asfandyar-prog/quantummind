@@ -8,35 +8,37 @@
 #                                      retry      assemble
 #                                   (max 1x)
 
+import asyncio
 from typing import TypedDict, Annotated
 import operator
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, BaseMessage
-from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langgraph.graph import StateGraph, END
 
 from app.core import llm
-from app.core.config import settings
+from app.core import vectorstore
 from app.core.prompts import RAG_PROMPT, build_rag_prompt
 from app.core.memory import get_checkpointer
 
-# ── ChromaDB setup ────────────────────────────────────────────
-# Same source of truth as routes/upload.py — see settings.chroma_dir.
-CHROMA_DIR = settings.chroma_dir
+import logging
+
+logger = logging.getLogger("quantummind.agents.rag")
+
+# The vector store and embedding model come from app/core/vectorstore.py, shared
+# with /upload. Retrieval is blocking, so it runs in a worker thread.
+
+# Earlier turns replayed into an answer; the checkpointer keeps the rest.
+MAX_HISTORY_MESSAGES = 12
 
 
-def get_vectorstore():
-    embeddings = HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
-    return Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=embeddings,
-        collection_name="quantummind_course",
-    )
+def _retrieve(query: str, week: int) -> list[str]:
+    """Blocking: the top 5 chunks for query, filtered to `week` when it's set.
+    Skips the embedding model entirely while nothing has been uploaded."""
+    if vectorstore.collection_count() == 0:
+        return []
+    search_kwargs = {"k": 5, "filter": {"week": week}} if week > 0 else {"k": 5}
+    docs = vectorstore.get_vectorstore().as_retriever(search_kwargs=search_kwargs).invoke(query)
+    return [doc.page_content for doc in docs]
 
 
 # ── STATE ─────────────────────────────────────────────────────
@@ -74,25 +76,10 @@ async def retrieve_context(state: RAGAgentState) -> dict:
     week = state.get("week", 0)
 
     try:
-        vectorstore = get_vectorstore()
-
-        # Filter by week if specified, otherwise search all
-        if week > 0:
-            retriever = vectorstore.as_retriever(
-                search_kwargs={
-                    "k": 5,
-                    "filter": {"week": week},
-                }
-            )
-        else:
-            retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-        docs = retriever.invoke(last_msg)
-        chunks = [doc.page_content for doc in docs]
-        print(f"[RAGAgent] retrieve_context → {len(chunks)} chunks (week {week})")
-
+        chunks = await asyncio.to_thread(_retrieve, last_msg, week)
+        logger.info(f"retrieve_context → {len(chunks)} chunks (week {week})")
     except Exception as e:
-        print(f"[RAGAgent] ChromaDB error: {e} — using empty context")
+        logger.warning(f"ChromaDB error: {e} — using empty context")
         chunks = []
 
     return {"retrieved_chunks": chunks, "grade_feedback": ""}
@@ -124,14 +111,14 @@ No course-specific material has been uploaded for this week yet.
 Answer using your general quantum computing knowledge, and note that
 the answer is from general knowledge, not the course materials."""
 
-    messages = [SystemMessage(content=system_prompt)] + state["messages"]
+    messages = [SystemMessage(content=system_prompt)] + state["messages"][-MAX_HISTORY_MESSAGES:]
 
     # On retry — add feedback
     if state.get("grade_feedback") == "fail" and state.get("retry_count", 0) > 0:
         messages.append(HumanMessage(content="Please improve your previous answer. Be more specific and cite the course material more directly."))
 
     answer = await llm.chat(messages, call_type="rag_generate")
-    print(f"[RAGAgent] generate_answer → {len(answer)} chars")
+    logger.info(f"generate_answer → {len(answer)} chars")
     return {"answer": answer}
 
 
@@ -163,13 +150,13 @@ Respond with ONLY: "pass" or "fail" """
     if grade not in ("pass", "fail"):
         grade = "pass"
 
-    print(f"[RAGAgent] grade_answer → {grade}")
+    logger.info(f"grade_answer → {grade}")
     return {"grade_feedback": grade}
 
 
 async def retry_node(state: RAGAgentState) -> dict:
     count = state.get("retry_count", 0) + 1
-    print(f"[RAGAgent] retry → {count}/1")
+    logger.info(f"retry → {count}/1")
     return {"retry_count": count}
 
 

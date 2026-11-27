@@ -34,12 +34,17 @@ def _bad_request():
     return openai.BadRequestError("bad input", response=httpx.Response(400, request=_req()), body=None)
 
 
+def _status_error(code):
+    return openai.APIStatusError("status", response=httpx.Response(code, request=_req()), body=None)
+
+
 # ── _is_transient classification ──────────────────────────────
 def test_is_transient_true_for_retryable():
     assert _is_transient(_rate_limit())
     assert _is_transient(_api_timeout())
     assert _is_transient(_server_error())
     assert _is_transient(asyncio.TimeoutError())
+    assert _is_transient(_status_error(408))      # request timeout: in the SDK's own retry set
 
 
 def test_is_transient_false_for_others():

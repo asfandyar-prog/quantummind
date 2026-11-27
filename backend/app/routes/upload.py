@@ -6,36 +6,30 @@
 # Each file is tagged with a week number so the RAG agent can
 # retrieve only content relevant to the current lesson.
 
+import asyncio
 import os
 import json
 import tempfile
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from app.core.auth import require_teacher
+from app.core.vectorstore import CHROMA_DIR, get_vectorstore
 
-from app.core.config import settings
+import logging
+
+logger = logging.getLogger("quantummind.routes.upload")
 
 router = APIRouter()
 
-# ── ChromaDB path ─────────────────────────────────────────────
-# Single source of truth: CHROMA_PATH via settings. Previously computed here
-# from __file__ and again in rag_agent.py, so CHROMA_PATH was silently ignored.
-CHROMA_DIR = settings.chroma_dir
-os.makedirs(CHROMA_DIR, exist_ok=True)
+# The vector store and embedding model live in app/core/vectorstore.py, shared
+# with the RAG workflow: one CHROMA_PATH, one model loaded once per process.
 
-# ── Embeddings model ──────────────────────────────────────────
-# all-MiniLM-L6-v2: small (80MB), fast, runs locally, free.
-# Downloads once on first use, cached after that.
-def get_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+# Course material comes from teachers. Without a cap, one large file is read
+# fully into memory before anything else happens.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 # ── Text splitter ─────────────────────────────────────────────
 # Splits documents into overlapping chunks.
@@ -48,16 +42,7 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 
 
-def get_vectorstore():
-    """Returns the ChromaDB vector store."""
-    return Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=get_embeddings(),
-        collection_name="quantummind_course",
-    )
-
-
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_teacher)])
 async def upload_file(
     file: UploadFile = File(...),
     week: int = Form(...),
@@ -65,7 +50,8 @@ async def upload_file(
     # Used to filter retrieval — when on Week 3, only retrieve Week 3 docs
 ):
     """
-    Upload a PDF or Jupyter notebook for a specific course week.
+    Upload a PDF or Jupyter notebook for a specific course week. Teacher-only
+    (X-Teacher-Password header), at most MAX_UPLOAD_BYTES.
 
     The file is:
     1. Saved to a temp location
@@ -76,7 +62,6 @@ async def upload_file(
     After uploading, the RAG agent can retrieve this content
     when a student asks questions in that week's lesson.
     """
-    allowed_types = ["application/pdf", "application/octet-stream", "text/plain"]
     allowed_extensions = [".pdf", ".ipynb", ".py", ".md"]
 
     filename = file.filename or ""
@@ -88,57 +73,70 @@ async def upload_file(
             detail=f"Unsupported file type: {ext}. Allowed: {allowed_extensions}"
         )
 
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large; the limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
+
     # Save uploaded file to temp location
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=ext
     ) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        # Load document based on file type
-        if ext == ".pdf":
-            docs = load_pdf(tmp_path)
-        elif ext == ".ipynb":
-            docs = load_notebook(tmp_path)
-        elif ext in (".py", ".md"):
-            docs = load_text(tmp_path, filename)
-        else:
-            docs = []
-
-        if not docs:
+        # Parsing, embedding (which loads the model on first use) and the Chroma
+        # write are all blocking CPU and disk work. Run them in a worker thread so
+        # one large upload doesn't stall every other request on the event loop.
+        n_chunks = await asyncio.to_thread(ingest_file, tmp_path, ext, filename, week)
+        if n_chunks == 0:
             raise HTTPException(status_code=400, detail="No text could be extracted from the file.")
 
-        # Split into chunks
-        chunks = text_splitter.split_documents(docs)
-
-        # Tag each chunk with week metadata
-        for chunk in chunks:
-            chunk.metadata["week"]     = week
-            chunk.metadata["filename"] = filename
-            chunk.metadata["source"]   = f"Week {week}: {filename}"
-
-        # Store in ChromaDB
-        vectorstore = get_vectorstore()
-        vectorstore.add_documents(chunks)
-
-        print(f"[Upload] Week {week} — {filename}: {len(chunks)} chunks stored")
+        logger.info(f"Week {week} — {filename}: {n_chunks} chunks stored")
 
         return JSONResponse({
             "status":   "success",
             "filename": filename,
             "week":     week,
-            "chunks":   len(chunks),
-            "message":  f"Successfully ingested {len(chunks)} chunks from {filename}",
+            "chunks":   n_chunks,
+            "message":  f"Successfully ingested {n_chunks} chunks from {filename}",
         })
 
+    except HTTPException:
+        raise  # e.g. the 400 for a file with no extractable text, not a 500
     except Exception as e:
-        print(f"[Upload] Error: {e}")
+        logger.exception(f"Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         os.unlink(tmp_path)
+
+
+def ingest_file(path: str, ext: str, filename: str, week: int) -> int:
+    """Load, split, tag and embed one file into Chroma. Returns the chunk count
+    (0 if no text could be extracted). Blocking: call it via asyncio.to_thread."""
+    if ext == ".pdf":
+        docs = load_pdf(path)
+    elif ext == ".ipynb":
+        docs = load_notebook(path)
+    elif ext in (".py", ".md"):
+        docs = load_text(path, filename)
+    else:
+        docs = []
+    if not docs:
+        return 0
+
+    chunks = text_splitter.split_documents(docs)
+    for chunk in chunks:
+        chunk.metadata["week"]     = week
+        chunk.metadata["filename"] = filename
+        chunk.metadata["source"]   = f"Week {week}: {filename}"
+
+    get_vectorstore().add_documents(chunks)
+    return len(chunks)
 
 
 def load_pdf(path: str):
@@ -190,12 +188,11 @@ def load_text(path: str, filename: str):
     return [Document(page_content=text, metadata={"filename": filename})]
 
 
-@router.get("/upload/status")
+@router.get("/upload/status", dependencies=[Depends(require_teacher)])
 async def upload_status():
     """Returns how many documents are in the vector store."""
     try:
-        vectorstore = get_vectorstore()
-        count = vectorstore._collection.count()
+        count = await asyncio.to_thread(lambda: get_vectorstore()._collection.count())
         return {"status": "ok", "total_chunks": count, "chroma_dir": CHROMA_DIR}
     except Exception as e:
         return {"status": "error", "error": str(e)}

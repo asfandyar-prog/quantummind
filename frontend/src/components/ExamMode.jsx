@@ -12,9 +12,9 @@ const TOPICS = [
 ]
 
 const VERSION_INFO = {
-  V1: { label: 'Static',   color: '#34C759', desc: '5 fixed questions, no adaptation' },
-  V2: { label: 'Adaptive', color: '#FF9500', desc: 'Fixed questions + follow-ups on weak answers' },
-  V3: { label: 'Dynamic',  color: '#FF3B30', desc: 'Fully adaptive — questions based on your answers' },
+  V1: { label: 'Static',   color: '#34C759', desc: '5 fixed questions, no follow-ups' },
+  V2: { label: 'Adaptive', color: '#FF9500', desc: 'AI questions, one follow-up on a weak answer' },
+  V3: { label: 'Dynamic',  color: '#FF3B30', desc: 'AI questions, up to two follow-ups on weak answers' },
 }
 
 function ScoreBar({ label, value, color }) {
@@ -36,6 +36,17 @@ function ScoreBar({ label, value, color }) {
   )
 }
 
+function scoreColor(total) {
+  return total >= 7 ? '#34C759' : total >= 5 ? '#FF9500' : '#FF3B30'
+}
+
+// scores is null for an answer the grader couldn't score: say so plainly
+// rather than show a number nobody gave.
+function TotalBadge({ scores, fontSize }) {
+  if (!scores) return <span style={{ fontSize, fontWeight: 700, color: '#6C6C70' }}>Needs teacher review</span>
+  return <span style={{ fontSize, fontWeight: 700, color: scoreColor(scores.total) }}>{scores.total}/10</span>
+}
+
 export default function ExamMode() {
   const [phase, setPhase]           = useState('setup')    // setup | exam | result
   const [studentName, setStudentName] = useState('')
@@ -52,6 +63,8 @@ export default function ExamMode() {
   const [examComplete, setExamComplete] = useState(false)
   const [isFollowup, setIsFollowup] = useState(false)
   const [listening, setListening]   = useState(false)
+  // Set while an answer is saved but not yet graded (the grader was down or busy).
+  const [pending, setPending]       = useState(null)   // { turnId, question, answer, wasFollowup }
 
   const answerRef  = useRef(null)
   const bottomRef  = useRef(null)
@@ -60,6 +73,34 @@ export default function ExamMode() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [transcript, lastResult])
+
+  // While an answer waits for grading, poll the session until the backfill
+  // worker has graded it and moved the exam on, then fold the result in as if
+  // it had come straight back.
+  useEffect(() => {
+    if (!pending || !sessionId) return
+    let done = false
+    async function poll() {
+      try {
+        const res = await fetch(`${BACKEND}/api/exam/session/${sessionId}/status?turn_id=${pending.turnId}`)
+        if (!res.ok) return
+        const status = await res.json()
+        if (done || status.awaiting_grade || !status.turn) return
+        done = true
+        recordResult(pending.question, pending.answer, pending.wasFollowup, {
+          ...status.turn,
+          feedback: status.turn.needs_review
+            ? "Saved, but it couldn't be graded automatically. A teacher will review it."
+            : 'Graded after a short delay.',
+        })
+        setPending(null)
+        advance(status.exam_complete, status.current_question, status.turn_number, status.is_followup)
+      } catch (_) { /* network blip: try again on the next tick */ }
+    }
+    poll()
+    const timer = setInterval(poll, 4000)
+    return () => { done = true; clearInterval(timer) }
+  }, [pending, sessionId])
 
   // Voice input
   function startListening() {
@@ -96,6 +137,7 @@ export default function ExamMode() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ student_name: studentName.trim(), topic: selectedTopic, version }),
       })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setSessionId(data.session_id)
       setQuestion(data.question)
@@ -109,7 +151,7 @@ export default function ExamMode() {
   }
 
   async function handleSubmitAnswer() {
-    if (!answer.trim() || isLoading) return
+    if (!answer.trim() || isLoading || pending) return
     setIsLoading(true)
     const submitted = answer.trim()
     setAnswer('')
@@ -120,36 +162,63 @@ export default function ExamMode() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, student_answer: submitted }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
-      // Add to transcript
-      setTranscript(prev => [...prev, {
-        question, answer: submitted, scores: data.scores,
-        justification: data.justification, ideal_answer: data.ideal_answer,
-        feedback: data.feedback, is_followup: data.is_followup,
-        turn_id: data.turn_id,
-      }])
-
-      setLastResult(data)
-      setIsFollowup(data.is_followup)
-
-      if (data.exam_complete) {
-        setExamComplete(true)
-        setPhase('result')
-      } else {
-        setQuestion(data.next_question)
-        setTurnNumber(data.turn_number)
+      // 409: this question was already answered (a double submit, another tab).
+      // Nothing new was recorded, so jump to where the session really is.
+      if (res.status === 409) {
+        advance(data.exam_complete, data.current_question, data.turn_number, data.is_followup)
+        return
       }
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
+
+      // The grader is down or saturated: the answer is saved and grading catches up.
+      if (data.status === 'saved_pending_grading') {
+        setPending({ turnId: data.turn_id, question, answer: submitted, wasFollowup: isFollowup })
+        return
+      }
+
+      recordResult(question, submitted, isFollowup, data)
+      advance(data.exam_complete, data.next_question, data.turn_number, data.is_followup)
     } catch (e) {
-      alert('Error submitting answer.')
+      setAnswer(submitted)   // keep what they typed
+      alert('Error submitting answer. Your text is still in the box, please try again.')
     } finally {
       setIsLoading(false)
     }
   }
 
+  // One answered question into the transcript. wasFollowup describes the
+  // question that was answered, not the one that comes next.
+  function recordResult(answeredQuestion, submitted, wasFollowup, result) {
+    setTranscript(prev => [...prev, {
+      question: answeredQuestion, answer: submitted, scores: result.scores,
+      justification: result.justification, ideal_answer: result.ideal_answer,
+      feedback: result.feedback, is_followup: wasFollowup,
+      turn_id: result.turn_id,
+    }])
+    setLastResult(result)
+  }
+
+  function advance(examComplete, nextQuestion, nextTurnNumber, nextIsFollowup) {
+    setIsFollowup(Boolean(nextIsFollowup))
+    if (examComplete) {
+      setExamComplete(true)
+      setPhase('result')
+    } else {
+      setQuestion(nextQuestion)
+      setTurnNumber(nextTurnNumber)
+    }
+  }
+
+  // Averages cover graded answers only; one that couldn't be graded has no score.
+  function averageOf(pick) {
+    const scored = transcript.filter(t => t.scores)
+    return scored.length ? Math.round(scored.reduce((s, t) => s + pick(t.scores), 0) / scored.length * 10) / 10 : 0
+  }
+
   function getFinalScore() {
-    if (!transcript.length) return 0
-    return Math.round(transcript.reduce((s, t) => s + t.scores.total, 0) / transcript.length * 10) / 10
+    return averageOf(s => s.total)
   }
 
   function getGrade(score) {
@@ -258,7 +327,7 @@ export default function ExamMode() {
           <div>
             <p style={{ fontSize: '11px', fontWeight: 600, color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '12px' }}>Score Breakdown</p>
             {['accuracy', 'reasoning', 'clarity'].map(dim => {
-              const avg = transcript.length ? Math.round(transcript.reduce((s, t) => s + t.scores[dim], 0) / transcript.length * 10) / 10 : 0
+              const avg = averageOf(s => s[dim])
               const colors = { accuracy: '#007AFF', reasoning: '#5856D6', clarity: '#34C759' }
               return <ScoreBar key={dim} label={dim} value={avg} color={colors[dim]} />
             })}
@@ -270,7 +339,7 @@ export default function ExamMode() {
           </div>
 
           <button
-            onClick={() => { setPhase('setup'); setTranscript([]); setLastResult(null); setSessionId(null); setAnswer('') }}
+            onClick={() => { setPhase('setup'); setTranscript([]); setLastResult(null); setSessionId(null); setAnswer(''); setPending(null) }}
             style={{ padding: '12px', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.1)', background: 'transparent', color: '#6C6C70', fontSize: '14px', cursor: 'pointer', fontFamily: FONT }}
           >
             Start New Exam
@@ -288,9 +357,7 @@ export default function ExamMode() {
                   <span style={{ fontSize: '11px', fontWeight: 600, color: turn.is_followup ? '#FF9500' : '#007AFF', background: turn.is_followup ? 'rgba(255,149,0,0.1)' : 'rgba(0,122,255,0.1)', padding: '2px 8px', borderRadius: '20px' }}>
                     {turn.is_followup ? 'Follow-up' : `Q${i + 1}`}
                   </span>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: turn.scores.total >= 7 ? '#34C759' : turn.scores.total >= 5 ? '#FF9500' : '#FF3B30' }}>
-                    {turn.scores.total}/10
-                  </span>
+                  <TotalBadge scores={turn.scores} fontSize="12px" />
                 </div>
                 <p style={{ fontSize: '14px', fontWeight: 600, color: '#1C1C1E' }}>{turn.question}</p>
               </div>
@@ -299,7 +366,7 @@ export default function ExamMode() {
                 <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
                   {[['accuracy', '#007AFF'], ['reasoning', '#5856D6'], ['clarity', '#34C759']].map(([dim, color]) => (
                     <div key={dim} style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', background: `${color}08`, border: `1px solid ${color}20`, textAlign: 'center' }}>
-                      <div style={{ fontSize: '16px', fontWeight: 700, color }}>{turn.scores[dim]}</div>
+                      <div style={{ fontSize: '16px', fontWeight: 700, color }}>{turn.scores ? turn.scores[dim] : '—'}</div>
                       <div style={{ fontSize: '10px', color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{dim}</div>
                     </div>
                   ))}
@@ -352,7 +419,7 @@ export default function ExamMode() {
             <p style={{ fontSize: '13px', fontWeight: 600, color: '#6C6C70', marginBottom: '6px' }}>Q{i+1}: {turn.question}</p>
             <p style={{ fontSize: '13px', color: '#3C3C43', marginBottom: '10px' }}>{turn.answer}</p>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: turn.scores.total >= 7 ? '#34C759' : turn.scores.total >= 5 ? '#FF9500' : '#FF3B30' }}>{turn.scores.total}/10</span>
+              <TotalBadge scores={turn.scores} fontSize="13px" />
               <span style={{ fontSize: '12px', color: '#6C6C70' }}>{turn.feedback}</span>
             </div>
           </div>
@@ -369,6 +436,12 @@ export default function ExamMode() {
           <p style={{ fontSize: '18px', fontWeight: 600, color: '#1C1C1E', lineHeight: 1.5 }}>{question}</p>
         </motion.div>
 
+        {pending && (
+          <div style={{ padding: '14px 18px', borderRadius: '12px', background: 'rgba(0,122,255,0.06)', border: '1px solid rgba(0,122,255,0.2)', fontSize: '14px', color: '#1C1C1E', lineHeight: 1.5 }}>
+            <strong>Your answer is saved.</strong> Grading is catching up; the next question will appear here on its own.
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
@@ -381,7 +454,7 @@ export default function ExamMode() {
           placeholder="Type your answer here… (Shift+Enter for new line, Enter to submit)"
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmitAnswer() } }}
           rows={3}
-          disabled={isLoading}
+          disabled={isLoading || Boolean(pending)}
           style={{ width: '100%', padding: '14px 16px', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.1)', fontSize: '15px', fontFamily: FONT, color: '#1C1C1E', resize: 'none', outline: 'none', background: '#FFFFFF', lineHeight: 1.6, boxSizing: 'border-box' }}
           onFocus={e => e.target.style.border = '1px solid rgba(255,149,0,0.4)'}
           onBlur={e  => e.target.style.border = '1px solid rgba(0,0,0,0.1)'}
@@ -399,12 +472,12 @@ export default function ExamMode() {
 
           <motion.button
             onClick={handleSubmitAnswer}
-            disabled={!answer.trim() || isLoading}
+            disabled={!answer.trim() || isLoading || Boolean(pending)}
             style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: answer.trim() ? 'linear-gradient(135deg, #FF9500, #FF3B30)' : 'rgba(0,0,0,0.08)', color: answer.trim() ? '#fff' : '#AEAEB2', fontSize: '14px', fontWeight: 600, fontFamily: FONT, cursor: answer.trim() ? 'pointer' : 'default', boxShadow: answer.trim() ? '0 3px 12px rgba(255,149,0,0.35)' : 'none' }}
             whileHover={answer.trim() ? { scale: 1.03 } : {}}
             whileTap={answer.trim() ? { scale: 0.97 } : {}}
           >
-            {isLoading ? 'Grading…' : 'Submit Answer →'}
+            {isLoading ? 'Grading…' : pending ? 'Waiting for grading…' : 'Submit Answer →'}
           </motion.button>
         </div>
       </div>

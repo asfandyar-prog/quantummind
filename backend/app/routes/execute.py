@@ -16,7 +16,8 @@ router = APIRouter()
 
 class ExecuteRequest(BaseModel):
     code: str = Field(..., min_length=1, description="Qiskit Python code to execute")
-    shots: int = Field(default=1024, ge=1, le=8192)
+    # No shots field: the shot count is whatever the student's own sim.run(...,
+    # shots=N) says. An old client that still sends shots is ignored, not refused.
 
 
 class ExecuteResponse(BaseModel):

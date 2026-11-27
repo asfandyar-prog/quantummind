@@ -6,6 +6,29 @@
 > GDPR-compliant system for live semester use. Update this file when reality
 > diverges from the plan — it is meant to be living, not frozen.
 
+## Status (2026-11-27)
+
+This file is the plan. What the code does today is in [README.md](README.md) and
+[docs/PROJECT_EXPLAINED.md](docs/PROJECT_EXPLAINED.md).
+
+| Phase | State |
+|---|---|
+| 0 · LLM seam | Done, on `main` |
+| 1 · Durable & shared state | Done, on `main` |
+| 2 · Resilience around the LLM | Done, on `main`; fixes on `fix/review-findings` (unmerged) |
+| 3 · Secure code execution | Done and tested locally and in CI; **off on the Railway deploy** (`EXECUTOR=disabled`, no Docker daemon) |
+| 4 · GDPR | Not started: no consent, export, erasure, retention or accounts |
+| 5 · UI | Only the "answer saved, grading catching up" exam state |
+| Observability | Partly: JSON logs with a request id and LOG_LEVEL (on `fix/pre-interview`); `/health` still checks no dependency; no metrics; no documented backup and restore procedure |
+| Deployment target | Railway + Groq today, not vLLM on the university GPU |
+
+Of the known issues below, the in-flight exam question and the teacher-password
+split are fixed, and the RAG route is wired in on `fix/pre-interview`. The file:line references in
+that section point at the code as it was then.
+
+The project has not run an exam for real students. The "~100 students" below is
+the target, not a past deployment.
+
 ## How to use this document
 You are working on QuantumMind, an existing multi-agent AI quantum-computing
 education platform (FastAPI + LangGraph + React). This brief is the north star

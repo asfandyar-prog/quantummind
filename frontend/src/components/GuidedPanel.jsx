@@ -146,20 +146,25 @@ export default function GuidedPanel() {
 
   async function handleGrade() {
     if (!checkAnswer.trim() || grading) return
-    const step = plan.steps[currentStep]
     setGrading(true)
 
     try {
+      // The answer key stays on the server: send which step of which plan, and
+      // the student's answer, nothing more.
       const res = await fetch(`${BACKEND}/api/lesson/grade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          question: step.check_question,
-          correct_answer: step.check_answer,
+          plan_id: plan.plan_id,
+          step_num: currentStep + 1,
           student_answer: checkAnswer,
         }),
       })
       const result = await res.json()
+      if (!res.ok) {
+        setGradeResult({ passed: false, feedback: result.detail || 'Grading failed. Please try again.' })
+        return
+      }
       setGradeResult(result)
 
       if (result.passed) {

@@ -50,7 +50,7 @@ there are no other Railway services to reference.
 | `EXECUTOR` | `disabled` | Railway has no Docker daemon — see §5 |
 | `FRONTEND_URL` | `https://<your-project>.vercel.app` | Exact CORS origin, set in §3 |
 | `CORS_ALLOW_ORIGIN_REGEX` | see §4 | Lets Vercel preview deploys through |
-| `TEACHER_PASSWORD` | a real password | Secret. There is a default (`quantum2026`) — if you skip this, that default is live |
+| `TEACHER_PASSWORD` | a real password | Secret. With `APP_ENV=production` the app refuses to start while this is still the published default (`quantum2026`) |
 
 **Leave unset** — the defaults in `app/core/config.py` are already right:
 `LLM_PROVIDER`, `LLM_MODEL`, `LLM_ROUTER_MODEL`, all `LLM_*` resilience knobs,
@@ -110,8 +110,8 @@ redis://…   ->  Connection
 `upstash.io` domain fails DNS resolution from the machine this was checked on —
 not just your database, the apex domain too, while Neon and GitHub resolved
 normally through the same resolver. That points at local DNS filtering rather
-than a deleted database, but it means the instance is **unverified**. This is
-also why the integration test suite has been skipping its Redis tests all along.
+than a deleted database, but it means the instance is **unverified**. CI doesn't
+depend on it: the integration suite runs against its own service containers.
 
 Before you deploy, confirm it from another network or the Upstash console. If
 the database has lapsed, the backend will boot-loop: `app/main.py`'s lifespan
@@ -280,8 +280,8 @@ Railway's disk does not survive a redeploy. Nothing lost here is irreplaceable:
 
 | Path | Written by | Lost on redeploy | Needs a volume? |
 |---|---|---|---|
-| `<CHROMA_PATH>` | `routes/upload.py` — embeddings of uploaded PDFs/notebooks | uploaded course material | Only once RAG is reachable; today nothing reads it |
-| `~/.cache/huggingface` | `all-MiniLM-L6-v2`, ~80 MB on first embedding call | the model | No, but it re-downloads at request time, so the first upload after each deploy is slow |
+| `<CHROMA_PATH>` | `routes/upload.py` — embeddings of uploaded PDFs/notebooks | uploaded course material | Yes, if uploads should outlast a deploy: the RAG workflow reads them |
+| `~/.cache/huggingface` | `all-MiniLM-L6-v2`, ~80 MB on first embedding call | the model | No, but it re-downloads on the first upload or RAG question after each deploy |
 | `/tmp/…` | `upload.py` staging, removed in a `finally` | nothing | No |
 
 Neon and Upstash are external and completely unaffected by redeploys — that is
@@ -298,28 +298,46 @@ against the backend package root, not the working directory.
 
 Deploying fixes none of these. Ordered by what a real student hits first.
 
+Before deploying this version: migration `0003` adds a unique constraint on
+`(session_id, turn_number)` and refuses to run if the database already holds
+duplicate turns. The pre-deploy command then fails and the previous version keeps
+serving; resolve the duplicates by hand and redeploy.
+
 **Broken:**
 
 1. **Practice mode cannot run code** — §5, by design.
-2. **Course mode never reads uploaded material.** The orchestrator's `rag`
-   branch is a stub that falls back to the theory agent; the fully-built RAG
-   graph is unreachable. The UI still says "Searching course materials…".
-3. **Teacher auth is one shared password.** Constant-time and read from
-   settings, but no rate limiting, no lockout, no accounts — and it guards every
-   student's name, answers and scores.
-4. **`POST /api/upload` is unauthenticated and unbounded.** Anyone can inject
-   content into the vector store or exhaust memory with one large file.
-5. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
-   Groq tokens per call.
+2. **Uploaded course material doesn't survive a redeploy.** The RAG workflow
+   reads it, but Chroma lives on the container's disk (§7), so re-upload after
+   each deploy or attach a volume and point `CHROMA_PATH` at it. Until then,
+   RAG answers say they're from general knowledge.
+3. **Teacher auth is one shared password.** Constant-time, read from settings,
+   and refused in production while it's the default, but no rate limiting, no
+   lockout, no accounts. A review records what changed, not who changed it.
+4. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
+   Groq tokens per call. The Redis limiter caps concurrent calls, not requests
+   per client, and no input has a length cap.
+5. **Prompt injection is mitigated, not solved.** Student text is delimited and
+   escaped in every grading prompt, but a model can still be persuaded; teacher
+   review is the backstop.
+6. **Logs are JSON lines on stdout** with a `request_id` (set `LOG_LEVEL`,
+   default `INFO`). Filter on `"event": "llm_call"` for per-call usage; the
+   Redis counters (`llm:tokens:total:<date>`, `llm:calls:<date>`) hold daily totals.
 
 **Fragile under load:**
 
-6. **Concurrent answers to one exam session can double-grade** — the idempotency
-   check and the grading write are not atomic.
-7. **Single worker only** — the LRU cache and executor semaphore are
+7. **Single worker only** — the lesson-plan cache and executor semaphore are
    per-process. See the comment in `backend/Dockerfile`.
+8. **Duplicate backfill work across workers.** Grading writes are idempotent, but
+   two workers can both call the LLM for the same pending answer.
+9. **The first RAG question or upload after a deploy is slow**: it loads the
+   embedding model (and downloads it, ~80 MB, since the cache is wiped too). It
+   runs in a worker thread, so other requests aren't blocked.
 
 **Smaller:**
 
-8. `GET /api/exam/session/{id}` and `/api/cache/stats` need no auth.
-9. `GET /api/history/{thread_id}` is a stub that always returns empty.
+10. `/api/cache/stats` needs no auth (it exposes only hit counts).
+11. Streamed answers are counted by call and latency; the Groq client isn't asked
+    to report token usage in streams.
+12. Lesson plans and their answer keys live in Redis for
+    `LESSON_PLAN_TTL_SECONDS` (default a day); a student who comes back later
+    gets "This lesson has expired" and starts it again.

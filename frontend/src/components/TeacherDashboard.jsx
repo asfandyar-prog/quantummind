@@ -26,7 +26,7 @@ function ScoreSlider({ label, aiScore, value, onChange, color }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
         <span style={{ fontSize: '12px', fontWeight: 600, color: '#6C6C70', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '11px', color: '#AEAEB2' }}>AI: {aiScore}</span>
+          <span style={{ fontSize: '11px', color: '#AEAEB2' }}>AI: {aiScore ?? '—'}</span>
           <span style={{ fontSize: '14px', fontWeight: 700, color, minWidth: '32px', textAlign: 'right' }}>{value}/10</span>
         </div>
       </div>
@@ -92,9 +92,10 @@ export default function TeacherDashboard() {
       const init = {}
       for (const t of data.turns || []) {
         init[t.turn_id] = {
-          accuracy:  t.teacher_accuracy  ?? t.score_accuracy,
-          reasoning: t.teacher_reasoning ?? t.score_reasoning,
-          clarity:   t.teacher_clarity   ?? t.score_clarity,
+          // An ungraded answer starts the sliders at 5, so submitting sends real scores.
+          accuracy:  t.teacher_accuracy  ?? t.score_accuracy  ?? 5,
+          reasoning: t.teacher_reasoning ?? t.score_reasoning ?? 5,
+          clarity:   t.teacher_clarity   ?? t.score_clarity   ?? 5,
           feedback:  t.teacher_feedback  || '',
           notes:     '',
         }
@@ -120,16 +121,13 @@ export default function TeacherDashboard() {
     )
 
     try {
-      await fetch(`${BACKEND}/api/teacher/review`, {
+      const res = await fetch(`${BACKEND}/api/teacher/review`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           session_id:        selectedSession.session_id,
           turn_id:           turn.turn_id,
           action:            changed ? 'modified' : 'accepted',
-          ai_accuracy:       turn.score_accuracy,
-          ai_reasoning:      turn.score_reasoning,
-          ai_clarity:        turn.score_clarity,
           teacher_accuracy:  changed ? rev.accuracy  : null,
           teacher_reasoning: changed ? rev.reasoning : null,
           teacher_clarity:   changed ? rev.clarity   : null,
@@ -137,9 +135,13 @@ export default function TeacherDashboard() {
           teacher_notes:     rev.notes,
         }),
       })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.detail || `HTTP ${res.status}`)
+      }
       setSubmitted(p => ({ ...p, [turn.turn_id]: true }))
     } catch (e) {
-      alert('Failed to submit review.')
+      alert(`Failed to submit review: ${e.message}`)
     } finally {
       setSubmitting(p => ({ ...p, [turn.turn_id]: false }))
     }
@@ -189,7 +191,8 @@ export default function TeacherDashboard() {
 
   // ── SESSION DETAIL ───────────────────────────────────────────
   if (phase === 'session' && selectedSession) {
-    const avgAI = turns.length ? Math.round(turns.reduce((s, t) => s + t.score_total, 0) / turns.length * 10) / 10 : 0
+    const scoredTurns = turns.filter(t => t.score_total != null)
+    const avgAI = scoredTurns.length ? Math.round(scoredTurns.reduce((s, t) => s + t.score_total, 0) / scoredTurns.length * 10) / 10 : 0
     return (
       <div style={{ width: '100vw', height: '100vh', background: '#F2F2F7', fontFamily: FONT, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -233,8 +236,8 @@ export default function TeacherDashboard() {
                       <span style={{ fontSize: '11px', fontWeight: 600, color: turn.is_followup ? '#FF9500' : '#007AFF', background: turn.is_followup ? 'rgba(255,149,0,0.1)' : 'rgba(0,122,255,0.1)', padding: '2px 8px', borderRadius: '20px' }}>
                         {turn.is_followup ? 'Follow-up' : `Q${i + 1}`}
                       </span>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: scoreColor(turn.score_total) }}>
-                        AI: {turn.score_total}/10
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: turn.score_total == null ? '#6C6C70' : scoreColor(turn.score_total) }}>
+                        {turn.score_total == null ? 'AI: not graded' : `AI: ${turn.score_total}/10`}
                       </span>
                       {done && <span style={{ fontSize: '11px', color: '#34C759', background: 'rgba(52,199,89,0.1)', padding: '2px 8px', borderRadius: '20px', fontWeight: 600 }}>✓ Reviewed</span>}
                     </div>
@@ -254,7 +257,7 @@ export default function TeacherDashboard() {
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
                       {[['accuracy', '#007AFF'], ['reasoning', '#5856D6'], ['clarity', '#34C759']].map(([dim, color]) => (
                         <div key={dim} style={{ flex: 1, padding: '10px', borderRadius: '10px', background: `${color}08`, border: `1px solid ${color}18`, textAlign: 'center' }}>
-                          <div style={{ fontSize: '18px', fontWeight: 700, color }}>{turn[`score_${dim}`]}</div>
+                          <div style={{ fontSize: '18px', fontWeight: 700, color }}>{turn[`score_${dim}`] ?? '—'}</div>
                           <div style={{ fontSize: '10px', color: '#AEAEB2', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{dim}</div>
                         </div>
                       ))}

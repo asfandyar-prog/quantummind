@@ -15,10 +15,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_engine, get_sessionmaker
 from app.db.models import ExamSession, ExamTurn, TeacherReview
+
+import logging
+
+logger = logging.getLogger("quantummind.db")
 
 
 def _now() -> datetime:
@@ -34,12 +39,27 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt is not None else None
 
 
+class StaleTurn(Exception):
+    """The session is no longer at the turn this write was computed for.
+
+    Raised when another request already recorded or advanced past that turn — a
+    double submit, or a stale Redis hot copy. Nothing was written.
+    """
+
+
 # ════════════════════════════════════════════════════════════════
 # SESSION OPERATIONS
 # ════════════════════════════════════════════════════════════════
 
-async def create_session(student_name: str, topic: str, version: str) -> str:
-    """Create a new exam session. Returns session_id."""
+async def create_session(
+    student_name: str, topic: str, version: str, first_question: Optional[str] = None,
+) -> str:
+    """Create a new exam session. Returns session_id.
+
+    With first_question, the session is created already holding its in-flight
+    question (turn 1), in the same INSERT, so an active session never exists
+    without a question to answer.
+    """
     session_id = str(uuid.uuid4())
     async with get_sessionmaker()() as session:
         session.add(ExamSession(
@@ -48,9 +68,13 @@ async def create_session(student_name: str, topic: str, version: str) -> str:
             topic=topic,
             version=version,
             started_at=_now(),
+            current_question=first_question,
+            current_turn_number=1,
+            current_is_followup=False,
+            followup_count=0,
         ))
         await session.commit()
-    print(f"[AuditDB] Session created: {session_id} | {student_name} | {topic} | {version}")
+    logger.info(f"Session created: {session_id} | {topic} | {version}")  # no student name in logs
     return session_id
 
 
@@ -68,12 +92,19 @@ async def end_session(session_id: str, avg_score: float, total_turns: int) -> No
             )
         )
         await session.commit()
-    print(f"[AuditDB] Session ended: {session_id} | avg={avg_score} | turns={total_turns}")
+    logger.info(f"Session ended: {session_id} | avg={avg_score} | turns={total_turns}")
 
 
 # ════════════════════════════════════════════════════════════════
 # TURN OPERATIONS — one transaction: completed turn + in-flight/completion
 # ════════════════════════════════════════════════════════════════
+
+def _mean_score(accuracy, reasoning, clarity) -> Optional[float]:
+    """Mean of the three dimensions, or None for an answer that couldn't be graded."""
+    if accuracy is None or reasoning is None or clarity is None:
+        return None
+    return round((accuracy + reasoning + clarity) / 3, 2)
+
 
 def _make_turn(
     session_id:       str,
@@ -87,7 +118,7 @@ def _make_turn(
     ideal_answer:     str,
     is_followup:      bool,
 ) -> ExamTurn:
-    score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    score_total = _mean_score(score_accuracy, score_reasoning, score_clarity)
     return ExamTurn(
         turn_id=str(uuid.uuid4()),
         session_id=session_id,
@@ -149,8 +180,12 @@ async def create_pending_turn(
             graded=False,
             answered_at=_now(),
         ))
-        await session.commit()
-    print(f"[AuditDB] Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise StaleTurn(f"turn {turn_number} of {session_id} is already recorded") from exc
+    logger.info(f"Pending turn saved: {turn_id} | session={session_id} turn={turn_number}")
     return turn_id
 
 
@@ -165,7 +200,7 @@ async def finalize_grade(
     """Backfill a pending turn's grade. Idempotent: the conditional UPDATE only
     affects a row that is still graded=false, so exactly one worker can claim it.
     Returns True iff this call claimed (graded) the turn."""
-    score_total = round((score_accuracy + score_reasoning + score_clarity) / 3, 2)
+    score_total = _mean_score(score_accuracy, score_reasoning, score_clarity)
     async with get_sessionmaker()() as session:
         result = await session.execute(
             update(ExamTurn)
@@ -182,7 +217,7 @@ async def finalize_grade(
         )
         await session.commit()
     claimed = result.rowcount == 1
-    print(f"[AuditDB] finalize_grade {turn_id}: {'claimed' if claimed else 'already graded'}")
+    logger.info(f"finalize_grade {turn_id}: {'claimed' if claimed else 'already graded'}")
     return claimed
 
 
@@ -260,6 +295,15 @@ async def get_pending_turn(session_id: str) -> Optional[dict]:
     return _turn_to_dict(t) if t is not None else None
 
 
+async def get_turn(session_id: str, turn_id: str) -> Optional[dict]:
+    """One turn of one session, or None."""
+    async with get_sessionmaker()() as session:
+        t = (await session.execute(
+            select(ExamTurn).where(ExamTurn.turn_id == turn_id, ExamTurn.session_id == session_id)
+        )).scalar_one_or_none()
+    return _turn_to_dict(t) if t is not None else None
+
+
 async def get_pending_turns(limit: int = 50) -> list[dict]:
     """All stuck turns across active sessions (ungraded OR graded-but-not-advanced)
     — the backfill worker's reconciliation set."""
@@ -274,6 +318,37 @@ async def get_pending_turns(limit: int = 50) -> list[dict]:
             .limit(limit)
         )).scalars().all()
     return [_turn_to_dict(t) for t in rows]
+
+
+async def get_ungraded_turns_of_ended_sessions(limit: int = 50) -> list[dict]:
+    """Answers still owed a grade whose session is no longer active: saved during
+    an outage, then the student ended the exam before the backfill caught up.
+    get_pending_turns only sees active sessions, so these need their own query."""
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(ExamTurn)
+            .join(ExamSession, ExamSession.session_id == ExamTurn.session_id)
+            .where(ExamSession.status != "active", ExamTurn.graded.is_(False))
+            .limit(limit)
+        )).scalars().all()
+    return [_turn_to_dict(t) for t in rows]
+
+
+async def refresh_session_average(session_id: str) -> None:
+    """Recompute avg_score from the session's graded turns (ungradable ones,
+    with no score, are left out). Used after a late grade lands on an ended
+    session, whose average was computed without it."""
+    async with get_sessionmaker()() as session:
+        avg = (await session.execute(
+            select(func.avg(ExamTurn.score_total))
+            .where(ExamTurn.session_id == session_id, ExamTurn.score_total.is_not(None))
+        )).scalar()
+        await session.execute(
+            update(ExamSession)
+            .where(ExamSession.session_id == session_id)
+            .values(avg_score=round(float(avg), 2) if avg is not None else 0)
+        )
+        await session.commit()
 
 
 async def set_in_flight(
@@ -296,7 +371,21 @@ async def set_in_flight(
             )
         )
         await session.commit()
-    print(f"[AuditDB] In-flight set: {session_id} | turn={current_turn_number}")
+    logger.info(f"In-flight set: {session_id} | turn={current_turn_number}")
+
+
+async def _add_turn_if_advanced(session, update_result, turn: ExamTurn) -> None:
+    """Finish an advance/complete transaction: insert the turn only if the guarded
+    session UPDATE matched, and turn a unique-constraint hit into StaleTurn."""
+    if update_result.rowcount != 1:
+        await session.rollback()
+        raise StaleTurn(f"{turn.session_id} is no longer at turn {turn.turn_number}")
+    session.add(turn)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise StaleTurn(f"turn {turn.turn_number} of {turn.session_id} is already recorded") from exc
 
 
 async def advance_exam(
@@ -316,17 +405,26 @@ async def advance_exam(
     next_is_followup:    bool,
     next_followup_count: int,
 ) -> str:
-    """ONE transaction: persist the completed turn AND set the next in-flight question."""
+    """ONE transaction: persist the completed turn AND set the next in-flight question.
+
+    Conditional on the session still being parked at turn_number. The UPDATE runs
+    first so it takes the session row lock: a concurrent submit for the same turn
+    blocks, re-reads the row, matches nothing and raises StaleTurn instead of
+    inserting a second copy of the turn.
+    """
     turn = _make_turn(
         session_id, turn_number, question, student_answer,
         score_accuracy, score_reasoning, score_clarity,
         ai_justification, ideal_answer, is_followup,
     )
     async with get_sessionmaker()() as session:
-        session.add(turn)
-        await session.execute(
+        result = await session.execute(
             update(ExamSession)
-            .where(ExamSession.session_id == session_id)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == turn_number,
+                ExamSession.status == "active",
+            )
             .values(
                 current_question=next_question,
                 current_turn_number=next_turn_number,
@@ -334,8 +432,8 @@ async def advance_exam(
                 followup_count=next_followup_count,
             )
         )
-        await session.commit()
-    print(f"[AuditDB] Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
+        await _add_turn_if_advanced(session, result, turn)
+    logger.info(f"Turn logged + advanced: {turn.turn_id} | next turn={next_turn_number}")
     return turn.turn_id
 
 
@@ -354,17 +452,24 @@ async def complete_exam(
     avg_score:        float,
     total_turns:      int,
 ) -> str:
-    """ONE transaction: persist the final turn AND mark the session completed."""
+    """ONE transaction: persist the final turn AND mark the session completed.
+
+    Conditional on the session still being parked at turn_number, exactly as
+    advance_exam — a concurrent or stale submit raises StaleTurn.
+    """
     turn = _make_turn(
         session_id, turn_number, question, student_answer,
         score_accuracy, score_reasoning, score_clarity,
         ai_justification, ideal_answer, is_followup,
     )
     async with get_sessionmaker()() as session:
-        session.add(turn)
-        await session.execute(
+        result = await session.execute(
             update(ExamSession)
-            .where(ExamSession.session_id == session_id)
+            .where(
+                ExamSession.session_id == session_id,
+                ExamSession.current_turn_number == turn_number,
+                ExamSession.status == "active",
+            )
             .values(
                 ended_at=_now(),
                 total_turns=total_turns,
@@ -373,8 +478,8 @@ async def complete_exam(
                 current_question=None,
             )
         )
-        await session.commit()
-    print(f"[AuditDB] Turn logged + completed: {turn.turn_id} | avg={avg_score}")
+        await _add_turn_if_advanced(session, result, turn)
+    logger.info(f"Turn logged + completed: {turn.turn_id} | avg={avg_score}")
     return turn.turn_id
 
 
@@ -382,34 +487,53 @@ async def complete_exam(
 # TEACHER REVIEW OPERATIONS
 # ════════════════════════════════════════════════════════════════
 
+def _delta(teacher: Optional[float], ai: Optional[float]) -> Optional[float]:
+    """teacher - AI, or None when the AI produced no score to compare against."""
+    return round(teacher - ai, 2) if teacher is not None and ai is not None else None
+
+
 async def log_teacher_review(
     session_id:        str,
     turn_id:           str,
-    ai_accuracy:       float,
-    ai_reasoning:      float,
-    ai_clarity:        float,
     teacher_accuracy:  Optional[float],
     teacher_reasoning: Optional[float],
     teacher_clarity:   Optional[float],
     teacher_feedback:  str,
     teacher_notes:     str,
     action:            str,  # 'accepted' or 'modified'
-) -> str:
-    """Log a teacher review. Always appends — never updates."""
+) -> Optional[str]:
+    """Log a teacher review. Always appends — never updates.
+
+    The AI's scores are read from the stored turn in the same session, never taken
+    from the caller, so the "AI said X, teacher said Y" record can't be forged or
+    mistyped. Returns None if the turn isn't part of the session; raises ValueError
+    when accepting an answer that has no AI score to accept.
+    """
     review_id = str(uuid.uuid4())
-    ai_total = round((ai_accuracy + ai_reasoning + ai_clarity) / 3, 2)
-
-    if action == "modified" and teacher_accuracy is not None:
-        t_total         = round((teacher_accuracy + teacher_reasoning + teacher_clarity) / 3, 2)
-        delta_accuracy  = round(teacher_accuracy  - ai_accuracy,  2)
-        delta_reasoning = round(teacher_reasoning - ai_reasoning, 2)
-        delta_clarity   = round(teacher_clarity   - ai_clarity,   2)
-    else:
-        t_total = ai_total
-        teacher_accuracy = teacher_reasoning = teacher_clarity = None
-        delta_accuracy = delta_reasoning = delta_clarity = 0.0
-
     async with get_sessionmaker()() as session:
+        turn = (await session.execute(
+            select(ExamTurn).where(ExamTurn.turn_id == turn_id, ExamTurn.session_id == session_id)
+        )).scalar_one_or_none()
+        if turn is None:
+            return None
+
+        ai_accuracy  = _f(turn.score_accuracy)
+        ai_reasoning = _f(turn.score_reasoning)
+        ai_clarity   = _f(turn.score_clarity)
+        ai_total     = _f(turn.score_total)
+
+        if action == "modified":
+            t_total         = _mean_score(teacher_accuracy, teacher_reasoning, teacher_clarity)
+            delta_accuracy  = _delta(teacher_accuracy,  ai_accuracy)
+            delta_reasoning = _delta(teacher_reasoning, ai_reasoning)
+            delta_clarity   = _delta(teacher_clarity,   ai_clarity)
+        else:
+            if ai_total is None:
+                raise ValueError("This answer has no AI score to accept; submit teacher scores instead.")
+            t_total = ai_total
+            teacher_accuracy = teacher_reasoning = teacher_clarity = None
+            delta_accuracy = delta_reasoning = delta_clarity = 0.0
+
         session.add(TeacherReview(
             review_id=review_id,
             session_id=session_id,
@@ -431,7 +555,7 @@ async def log_teacher_review(
             action=action,
         ))
         await session.commit()
-    print(f"[AuditDB] Teacher review: {action} | delta_acc={delta_accuracy}")
+    logger.info(f"Teacher review: {action} | delta_acc={delta_accuracy}")
     return review_id
 
 
@@ -483,17 +607,42 @@ async def get_all_sessions(limit: int = 50) -> list[dict]:
 
 
 async def get_session_turns(session_id: str) -> list[dict]:
-    """Get all turns for a session (with any teacher review) — for transcript review."""
-    stmt = (
+    """Get all turns for a session (with its latest teacher review) — for transcript review.
+
+    Reviews are append-only, so a turn can have several. Only the most recent one
+    is joined: a plain outer join would repeat the turn once per review and
+    double-count it in everything built on this list (the exam-state rebuild,
+    backfill averages, the teacher transcript).
+    """
+    latest_review = (
         select(
-            ExamTurn,
+            TeacherReview.turn_id,
             TeacherReview.teacher_accuracy,
             TeacherReview.teacher_reasoning,
             TeacherReview.teacher_clarity,
             TeacherReview.teacher_feedback,
-            TeacherReview.action.label("review_action"),
+            TeacherReview.action,
+            func.row_number().over(
+                partition_by=TeacherReview.turn_id,
+                order_by=TeacherReview.reviewed_at.desc(),
+            ).label("rn"),
         )
-        .outerjoin(TeacherReview, TeacherReview.turn_id == ExamTurn.turn_id)
+        .where(TeacherReview.session_id == session_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            ExamTurn,
+            latest_review.c.teacher_accuracy,
+            latest_review.c.teacher_reasoning,
+            latest_review.c.teacher_clarity,
+            latest_review.c.teacher_feedback,
+            latest_review.c.action.label("review_action"),
+        )
+        .outerjoin(
+            latest_review,
+            (latest_review.c.turn_id == ExamTurn.turn_id) & (latest_review.c.rn == 1),
+        )
         .where(ExamTurn.session_id == session_id)
         .order_by(ExamTurn.turn_number.asc())
     )
@@ -554,8 +703,13 @@ async def get_research_stats() -> dict:
             "FROM exam_turns WHERE score_total < 5"
         ))).mappings().first()
 
+        ungradable = (await conn.execute(text(
+            "SELECT COUNT(*) FROM exam_turns WHERE graded AND score_total IS NULL"
+        ))).scalar()
+
     return {
         "sessions_by_version":   [_conv(r) for r in version_counts],
         "grading_agreement":     _conv(agreement) if agreement else {},
         "weak_answer_detection": _conv(weak_answers) if weak_answers else {},
+        "ungradable_answers":    ungradable,
     }

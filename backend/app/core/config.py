@@ -14,6 +14,10 @@ from functools import lru_cache
 # the .env file from disk — wasteful and slow.
 
 
+# Published in this repo, so production refuses to start with it (see below).
+DEFAULT_TEACHER_PASSWORD = "quantum2026"
+
+
 class Settings(BaseSettings):
     """
     All configuration for QuantumMind backend.
@@ -64,8 +68,10 @@ class Settings(BaseSettings):
 
     # ── App ───────────────────────────────────────────────────
     app_env: str = "development"
-    # "development" enables detailed error messages and auto-reload.
-    # "production" disables these for security.
+    log_level: str = "INFO"   # quantummind.* loggers: DEBUG | INFO | WARNING | ERROR
+    # "development" serves the interactive API docs at /docs. "production" hides
+    # them and turns on the fail-fast checks below: no subprocess executor and no
+    # default teacher password. Auto-reload is a uvicorn flag, not this setting.
 
     cors_allow_origin_regex: Optional[str] = None
     # Optional second CORS rule, matched in FULL against the request Origin, for
@@ -87,8 +93,8 @@ class Settings(BaseSettings):
     # Where ChromaDB stores its vector files on disk.
     # This folder is created automatically when you first upload a doc.
 
-    teacher_password: str = "quantum2026"
-    # Password for teacher mode. Change this in production!
+    teacher_password: str = DEFAULT_TEACHER_PASSWORD
+    # Password for teacher mode. APP_ENV=production refuses this default.
 
     # ── Database & cache (Phase 1) ────────────────────────────
     # Single connection string — only this changes for managed vs self-hosted.
@@ -98,6 +104,7 @@ class Settings(BaseSettings):
     db_pool_size: int = 10                          # async engine pool size
     db_max_overflow: int = 5                        # pool overflow ceiling
     exam_state_ttl_seconds: int = 86400             # Redis safety TTL (Postgres is source of truth)
+    lesson_plan_ttl_seconds: int = 86400            # how long a lesson's server-side answer key lives
 
     @property
     def chroma_dir(self) -> str:
@@ -150,6 +157,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "EXECUTOR=subprocess requires ALLOW_INSECURE_EXECUTOR=true (insecure, dev only)"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_teacher_password(self):
+        """Fail fast: the default teacher password is published in this repo."""
+        if self.app_env == "production" and self.teacher_password == DEFAULT_TEACHER_PASSWORD:
+            raise ValueError(
+                "APP_ENV=production requires TEACHER_PASSWORD to be changed from the published default"
+            )
         return self
 
     class Config:

@@ -1,23 +1,19 @@
 
 
 # ── app/agents/orchestrator.py ────────────────────────────────
-import json
-# json is Python's built-in JSON parser.
-# We use it to parse the Orchestrator's routing decision.
-# The LLM outputs a JSON string → json.loads() converts it to a dict.
-
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from app.core import llm
 from app.core.config import settings
 from app.core.prompts import ORCHESTRATOR_PROMPT
+from app.core.structured import RouteDecision, ask_validated
 from app.agents.theory_agent import run_theory_agent, stream_theory_agent
 from app.agents.code_agent import run_code_agent, stream_code_agent
 from app.agents.rag_agent import run_rag_agent, stream_rag_agent
 
+import logging
 
-# Valid agent names — used to validate the LLM's routing decision
-VALID_AGENTS = {"theory", "code", "rag", "review"}
+logger = logging.getLogger("quantummind.agents.router")
+
 
 # Fallback agent if routing fails
 DEFAULT_AGENT = "theory"
@@ -29,8 +25,8 @@ async def route(user_message: str) -> str:
 
     Returns the agent name as a string: "theory", "code", "rag", or "review"
 
-    This function is defensive — if the LLM returns invalid JSON,
-    or an unknown agent name, we fall back to "theory" rather than crashing.
+    The reply is validated as RouteDecision (core/structured.py). An invalid
+    reply gets one corrective retry; if that fails too, we fall back to "theory".
     Defensive programming is critical in production AI systems because
     LLMs can occasionally produce unexpected output.
     """
@@ -39,33 +35,42 @@ async def route(user_message: str) -> str:
         HumanMessage(content=user_message),
     ]
 
-    raw_response = await llm.chat(messages, call_type="route", model=settings.llm_router_model)
-    # raw_response is a string like: '{"agent": "theory", "reason": "..."}'
-
-    try:
-        parsed = json.loads(raw_response)
-        # json.loads converts the JSON string to a Python dict:
-        # {"agent": "theory", "reason": "Conceptual question"}
-
-        agent = parsed.get("agent", DEFAULT_AGENT)
-        # .get() with a default is safer than parsed["agent"]
-        # If "agent" key is missing, we get DEFAULT_AGENT instead of KeyError
-
-        reason = parsed.get("reason", "No reason provided")
-
-        if agent not in VALID_AGENTS:
-            # LLM returned a valid JSON but with an unknown agent name
-            print(f"[Orchestrator] Unknown agent '{agent}', falling back to '{DEFAULT_AGENT}'")
-            return DEFAULT_AGENT
-
-        print(f"[Orchestrator] Routing to '{agent}': {reason}")
-        return agent
-
-    except json.JSONDecodeError:
-        # LLM didn't return valid JSON — this can happen occasionally
-        print(f"[Orchestrator] Failed to parse routing decision: {raw_response}")
-        print(f"[Orchestrator] Falling back to '{DEFAULT_AGENT}'")
+    decision = await ask_validated(
+        messages, RouteDecision, call_type="route", model=settings.llm_router_model,
+    )
+    if decision is None:
+        # Fail closed to the safe default: Theory answers without running code.
+        logger.warning(f"Router reply invalid after one retry, falling back to '{DEFAULT_AGENT}'")
         return DEFAULT_AGENT
+    logger.info(f"Routing to '{decision.agent}': {decision.reason}")
+    return decision.agent
+
+
+# Router label → the workflow that actually handles it. One table, used by both
+# the /chat and /stream paths, so they can never disagree.
+#   review → code: there is no Review agent; the Code workflow is the closest fit
+WORKFLOW_FOR_LABEL = {
+    "theory": "theory",
+    "code":   "code",
+    "review": "code",
+    "rag":    "rag",
+}
+
+
+async def pick_workflow(user_message: str, mode: str) -> str:
+    """Which workflow handles this message: "theory", "code" or "rag".
+
+    Practice mode always goes to Code with no LLM call; otherwise the router
+    labels the message and WORKFLOW_FOR_LABEL maps the label.
+    """
+    if mode == "practice":
+        logger.info("Practice mode — forcing route to 'code'")
+        return "code"
+    label = await route(user_message)
+    workflow = WORKFLOW_FOR_LABEL.get(label, DEFAULT_AGENT)
+    if workflow != label:
+        logger.info(f"'{label}' has no workflow of its own, using '{workflow}'")
+    return workflow
 
 
 async def run_agent(
@@ -75,53 +80,13 @@ async def run_agent(
     thread_id: str = "default",
     week: int = 0,
 ) -> str:
-    """
-    Full pipeline: route the message then run the correct agent.
-    Returns the complete response string (non-streaming).
-
-    Args:
-        user_message: The student's question
-        chat_history: Previous conversation turns
-        mode: The app mode ("theory", "practice", "guided")
-              Used to bias routing — in practice mode, code questions
-              should go to code agent even if ambiguous.
-
-    Returns:
-        Complete response string from the selected agent
-    """
-    if chat_history is None:
-        chat_history = []
-
-    # In practice mode, always route to code agent
-    # This overrides the LLM's routing decision for clear UX
-    if mode == "practice":
-        agent_name = "code"
-        print(f"[Orchestrator] Practice mode — forcing route to 'code'")
-    else:
-        agent_name = await route(user_message)
-
-    # Route to the correct agent
-    # We use if/elif instead of a dict of functions because each agent
-    # might need different arguments in future (RAG needs context, etc.)
-    if agent_name == "theory":
-        return await run_theory_agent(user_message, chat_history, thread_id)
-
-    elif agent_name == "code":
-        return await run_code_agent(user_message, chat_history, thread_id)
-
-    elif agent_name == "rag":
-        # RAG agent not built yet — fall back to theory agent
-        # with a note. We'll replace this in Phase 2.
-        print("[Orchestrator] RAG agent not yet implemented, using theory agent")
-        return await run_theory_agent(user_message, chat_history, thread_id)
-
-    elif agent_name == "review":
-        # Review agent not built yet — fall back to code agent
-        print("[Orchestrator] Review agent not yet implemented, using code agent")
-        return await run_code_agent(user_message, chat_history, thread_id)
-
-    else:
-        return await run_theory_agent(user_message, chat_history, thread_id)
+    """Route the message, run the chosen workflow, return its complete answer."""
+    workflow = await pick_workflow(user_message, mode)
+    if workflow == "code":
+        return await run_code_agent(user_message, chat_history or [], thread_id)
+    if workflow == "rag":
+        return await run_rag_agent(user_message, chat_history or [], thread_id, week)
+    return await run_theory_agent(user_message, chat_history or [], thread_id)
 
 
 async def stream_agent(
@@ -131,30 +96,20 @@ async def stream_agent(
     thread_id: str = "default",
     week: int = 0,
 ):
+    """Route the message, then stream the chosen workflow's answer.
+
+    Routing itself is not streamed: the workflow is picked first, then its
+    answer streams. Theory streams real tokens; the Code and RAG streams are
+    simulated (the finished answer is sent word by word). `week` filters RAG
+    retrieval to that course week; 0 searches every week.
     """
-    Full pipeline in STREAMING mode.
-    Routes the message then streams tokens from the correct agent.
-
-    This is an async generator — it yields tokens one at a time.
-    The streaming route (POST /stream) iterates over this to push
-    tokens to the frontend via SSE.
-
-    Note: routing itself is NOT streamed — we first get the agent name
-    (fast, ~200ms), then stream the actual response.
-    """
-    if chat_history is None:
-        chat_history = []
-
-    if mode == "practice":
-        agent_name = "code"
-    else:
-        agent_name = await route(user_message)
-
-    # Stream from the correct agent
-    if agent_name in ("theory", "rag", "review"):
-        async for token in stream_theory_agent(user_message, chat_history, thread_id):
+    workflow = await pick_workflow(user_message, mode)
+    if workflow == "code":
+        async for token in stream_code_agent(user_message, chat_history or [], thread_id):
             yield token
-
-    elif agent_name == "code":
-        async for token in stream_code_agent(user_message, chat_history, thread_id):
+    elif workflow == "rag":
+        async for token in stream_rag_agent(user_message, chat_history or [], thread_id, week):
+            yield token
+    else:
+        async for token in stream_theory_agent(user_message, chat_history or [], thread_id):
             yield token

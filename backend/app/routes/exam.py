@@ -1,37 +1,27 @@
 # ── app/routes/exam.py ───────────────────────────────────────
-import secrets
 from fastapi import APIRouter, HTTPException, Header
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
-from app.agents.exam_agent import generate_question, grade_answer, decide_followup
+from app.agents.exam_agent import (
+    generate_question, grade_answer, decide_followup,
+    GradingFailed, ungraded_result, average_score,
+)
 from app.db.audit_db import (
-    create_session, end_session, set_in_flight, advance_exam, complete_exam,
-    create_pending_turn, get_pending_turn, get_session_row,
+    create_session, end_session, advance_exam, complete_exam,
+    create_pending_turn, get_pending_turn, get_session_row, get_turn, StaleTurn,
     log_teacher_review, get_all_sessions, get_session_turns, get_research_stats,
 )
-from app.core.config import settings
+from app.core.auth import verify_teacher
 from app.core.exam_state import save_active, load_active, clear_active
 from app.core.llm_errors import LLMUnavailable, LLMBusy
 
+import logging
+
+logger = logging.getLogger("quantummind.routes.exam")
+
 router = APIRouter()
-
-
-def verify_teacher(password: Optional[str]) -> bool:
-    """Check the teacher password against the configured value, in constant time.
-
-    Reads settings.teacher_password rather than os.environ. pydantic-settings
-    parses .env into the settings object WITHOUT exporting to os.environ, so the
-    previous os.environ.get("TEACHER_PASSWORD", "quantum2025") ignored the
-    configured password entirely whenever it came from .env — and silently
-    accepted a hardcoded fallback that appears in no documentation.
-
-    compare_digest avoids leaking the password's length or its matching prefix
-    through response timing.
-    """
-    if not password:
-        return False
-    return secrets.compare_digest(password, settings.teacher_password)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -49,22 +39,20 @@ async def start_exam(req: StartRequest):
     if req.version not in ("V1", "V2", "V3"):
         raise HTTPException(400, "version must be V1, V2, or V3")
 
-    session_id = await create_session(req.student_name, req.topic, req.version)
+    # The first question comes BEFORE any write. If the LLM is down, nothing is
+    # stored and the student gets a 503 to retry, instead of an empty "active"
+    # session that no one can answer and that clutters the teacher dashboard.
+    try:
+        question = await generate_question(
+            topic=req.topic, version=req.version,
+            turn_number=1, previous_qa=[], is_followup=False,
+        )
+    except (LLMUnavailable, LLMBusy):
+        raise HTTPException(503, "The examiner is unavailable right now. Please try again in a minute.")
 
-    question = await generate_question(
-        topic=req.topic, version=req.version,
-        turn_number=1, previous_qa=[], is_followup=False,
-    )
-
-    # Postgres FIRST: the in-flight question is durable before we respond, so a
-    # restart immediately after start still knows the current question.
-    await set_in_flight(
-        session_id,
-        current_question=question,
-        current_turn_number=1,
-        current_is_followup=False,
-        followup_count=0,
-    )
+    # Postgres FIRST, in one INSERT: the session and its in-flight question are
+    # durable together before we respond.
+    session_id = await create_session(req.student_name, req.topic, req.version, first_question=question)
 
     # THEN the Redis hot copy.
     state = {
@@ -76,7 +64,7 @@ async def start_exam(req: StartRequest):
     }
     await save_active(session_id, state)
 
-    print(f"[ExamRoute] Started: {session_id} | {req.student_name} | {req.topic} | {req.version}")
+    logger.info(f"Started: {session_id} | {req.topic} | {req.version}")  # no student name in logs
     return {"session_id": session_id, "question": question, "turn_number": 1, "version": req.version}
 
 
@@ -93,6 +81,25 @@ def _pending_response(turn_id: str) -> dict:
         "exam_complete": False,
         "message": "Your answer is saved. Grading is catching up — check back shortly.",
     }
+
+
+async def _stale_response(session_id: str) -> JSONResponse:
+    """409 for an answer to a turn this session has already moved past.
+
+    Drops the possibly-stale Redis copy so the next read rebuilds from Postgres,
+    and returns the session's real position so the client can resync.
+    """
+    await clear_active(session_id)
+    row = await get_session_row(session_id)
+    active = row is not None and row["status"] == "active"
+    return JSONResponse(status_code=409, content={
+        "status": "stale",
+        "message": "That question was already answered. Showing the current question.",
+        "exam_complete": not active,
+        "current_question": row["current_question"] if active else None,
+        "turn_number": row["current_turn_number"] if active else None,
+        "is_followup": row["current_is_followup"] if active else False,
+    })
 
 
 @router.post("/exam/answer")
@@ -117,14 +124,18 @@ async def submit_answer(req: AnswerRequest):
     is_followup_for_turn = state["followup_count"] > 0
 
     try:
-        # Grade — 1 LLM call
-        grading = await grade_answer(topic, question, req.student_answer)
+        # Grade — 1 LLM call (2 if the reply needs a corrective retry)
+        try:
+            grading = await grade_answer(topic, question, req.student_answer)
+        except GradingFailed:
+            grading = ungraded_result()  # recorded with no scores, never a guessed one
 
         # Update the working state. The turn is appended now so it feeds the next
         # question's context (previous_qa uses question/answer/score, not turn_id).
         new_turn = {"question": question, "answer": req.student_answer, "score": grading["total"], "turn_id": None}
         state["turns"].append(new_turn)
-        state["total_score"] += grading["total"]
+        if grading["total"] is not None:
+            state["total_score"] += grading["total"]
         for area in grading["weak_areas"]:
             if area not in state["weak_areas"]:
                 state["weak_areas"].append(area)
@@ -138,7 +149,10 @@ async def submit_answer(req: AnswerRequest):
 
         # Feedback
         t = grading["total"]
-        feedback = "Excellent answer!" if t >= 8 else "Good answer, some areas could be more precise." if t >= 6 else "Partial understanding. Let's explore further." if t >= 4 else "This needs more work. Let's try a follow-up."
+        if t is None:
+            feedback = "Your answer is saved but couldn't be graded automatically. A teacher will review it."
+        else:
+            feedback = "Excellent answer!" if t >= 8 else "Good answer, some areas could be more precise." if t >= 6 else "Partial understanding. Let's explore further." if t >= 4 else "This needs more work. Let's try a follow-up."
 
         next_question = None
         is_followup   = False
@@ -193,7 +207,7 @@ async def submit_answer(req: AnswerRequest):
 
         else:
             exam_complete = True
-            avg = round(state["total_score"] / len(state["turns"]), 2)
+            avg = average_score(t["score"] for t in state["turns"])
             turn_id = await complete_exam(
                 session_id=req.session_id, turn_number=turn_num,
                 question=question, student_answer=req.student_answer,
@@ -209,7 +223,8 @@ async def submit_answer(req: AnswerRequest):
             "status": "graded",
             "awaiting_grade": False,
             "turn_id": turn_id,
-            "scores": {"accuracy": grading["accuracy"], "reasoning": grading["reasoning"], "clarity": grading["clarity"], "total": grading["total"]},
+            "scores": None if grading["total"] is None else {"accuracy": grading["accuracy"], "reasoning": grading["reasoning"], "clarity": grading["clarity"], "total": grading["total"]},
+            "needs_review": grading["total"] is None,
             "justification": grading["justification"],
             "ideal_answer": grading["ideal_answer"],
             "feedback": feedback,
@@ -219,14 +234,25 @@ async def submit_answer(req: AnswerRequest):
             "turn_number": turn_num + 1 if not exam_complete else turn_num,
         }
 
+    except StaleTurn:
+        # Another request already recorded this turn, or the Redis copy was stale.
+        return await _stale_response(req.session_id)
+
     except (LLMUnavailable, LLMBusy):
         # LLM down/saturated: persist the answer durably (graded=false) BEFORE
         # responding. The backfill worker grades it and advances the exam later.
-        turn_id = await create_pending_turn(
-            session_id=req.session_id, turn_number=turn_num,
-            question=question, student_answer=req.student_answer,
-            is_followup=is_followup_for_turn,
-        )
+        try:
+            turn_id = await create_pending_turn(
+                session_id=req.session_id, turn_number=turn_num,
+                question=question, student_answer=req.student_answer,
+                is_followup=is_followup_for_turn,
+            )
+        except StaleTurn:
+            # A concurrent request already recorded this turn — pending or graded.
+            existing = await get_pending_turn(req.session_id)
+            if existing is not None:
+                return _pending_response(existing["turn_id"])
+            return await _stale_response(req.session_id)
         await clear_active(req.session_id)  # Redis copy is stale; rebuild from PG next
         return _pending_response(turn_id)
 
@@ -238,26 +264,43 @@ async def end_exam_early(req: dict):
     if state is None:
         raise HTTPException(404, "Session not found.")
     total = len(state["turns"])
-    avg   = round(state["total_score"] / total, 2) if total > 0 else 0.0
+    avg   = average_score(t["score"] for t in state["turns"])
     await end_session(session_id, avg, total)   # Postgres FIRST
     await clear_active(session_id)               # THEN drop Redis
     return {"status": "ended", "avg_score": avg, "total_turns": total}
 
 
 @router.get("/exam/session/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, x_teacher_password: Optional[str] = Header(None)):
+    """Full transcript with ideal answers: teacher-only, like /teacher/session."""
+    if not verify_teacher(x_teacher_password):
+        raise HTTPException(401, "Invalid teacher password.")
     turns = await get_session_turns(session_id)
     return {"session_id": session_id, "turns": turns}
 
 
 @router.get("/exam/session/{session_id}/status")
-async def session_status(session_id: str):
-    """Poll point for the 'answer saved, grading catching up' UX (Phase 5 consumes
-    this). awaiting_grade flips false once the backfill worker has graded and
-    advanced; then current_question is the next question (or exam_complete)."""
+async def session_status(session_id: str, turn_id: Optional[str] = None):
+    """Poll point for the 'answer saved, grading catching up' UX.
+
+    awaiting_grade flips false once the backfill worker has graded the answer and
+    moved the exam on; current_question is then the next question (or
+    exam_complete is true). Pass the turn_id from the saved_pending_grading
+    response to get that answer's result back once it is graded.
+    """
     row = await get_session_row(session_id)
     if row is None:
         raise HTTPException(404, "Session not found.")
+
+    resp = await _session_position(session_id, row)
+    if turn_id is not None:
+        turn = await get_turn(session_id, turn_id)
+        resp["turn"] = _turn_result(turn) if turn is not None and turn["graded"] else None
+    return resp
+
+
+async def _session_position(session_id: str, row: dict) -> dict:
+    """Where the session stands: completed, waiting for an answer, or mid-grading."""
     if row["status"] != "active":
         return {"status": "completed", "awaiting_grade": False, "exam_complete": True}
 
@@ -270,6 +313,7 @@ async def session_status(session_id: str):
             "exam_complete": False,
             "current_question": row["current_question"],
             "turn_number": row["current_turn_number"],
+            "is_followup": row["current_is_followup"],
         }
 
     # An answer is mid-processing (grading and/or next-question generation).
@@ -280,7 +324,7 @@ async def session_status(session_id: str):
         "turn_id": pending["turn_id"],
         "graded": bool(pending["graded"]),
     }
-    if pending["graded"]:
+    if pending["graded"] and pending["score_total"] is not None:
         resp["scores"] = {
             "accuracy":  pending["score_accuracy"],
             "reasoning": pending["score_reasoning"],
@@ -288,6 +332,23 @@ async def session_status(session_id: str):
             "total":     pending["score_total"],
         }
     return resp
+
+
+def _turn_result(t: dict) -> dict:
+    """One graded answer, in the same shape /exam/answer returns it."""
+    scored = t["score_total"] is not None
+    return {
+        "turn_id": t["turn_id"],
+        "scores": {
+            "accuracy":  t["score_accuracy"],
+            "reasoning": t["score_reasoning"],
+            "clarity":   t["score_clarity"],
+            "total":     t["score_total"],
+        } if scored else None,
+        "needs_review": not scored,
+        "justification": t["ai_justification"],
+        "ideal_answer": t["ideal_answer"],
+    }
 
 
 # ════════════════════════════════════════════════════════════════
@@ -311,27 +372,32 @@ async def teacher_session(session_id: str, x_teacher_password: Optional[str] = H
 class ReviewRequest(BaseModel):
     session_id: str
     turn_id:    str
-    action:     str   # 'accepted' or 'modified'
-    teacher_accuracy:  Optional[float] = None
-    teacher_reasoning: Optional[float] = None
-    teacher_clarity:   Optional[float] = None
+    action:     Literal["accepted", "modified"]
+    teacher_accuracy:  Optional[float] = Field(default=None, ge=0, le=10)
+    teacher_reasoning: Optional[float] = Field(default=None, ge=0, le=10)
+    teacher_clarity:   Optional[float] = Field(default=None, ge=0, le=10)
     teacher_feedback:  str = ""
     teacher_notes:     str = ""
-    ai_accuracy:       float = 5.0
-    ai_reasoning:      float = 5.0
-    ai_clarity:        float = 5.0
+    # No ai_* fields: the AI's scores are read from the stored turn, never taken
+    # from the client. Older clients that still send them are ignored.
 
 
 @router.post("/teacher/review")
 async def teacher_review(req: ReviewRequest, x_teacher_password: Optional[str] = Header(None)):
     if not verify_teacher(x_teacher_password):
         raise HTTPException(401, "Invalid teacher password.")
-    review_id = await log_teacher_review(
-        session_id=req.session_id, turn_id=req.turn_id,
-        ai_accuracy=req.ai_accuracy, ai_reasoning=req.ai_reasoning, ai_clarity=req.ai_clarity,
-        teacher_accuracy=req.teacher_accuracy, teacher_reasoning=req.teacher_reasoning, teacher_clarity=req.teacher_clarity,
-        teacher_feedback=req.teacher_feedback, teacher_notes=req.teacher_notes, action=req.action,
-    )
+    if req.action == "modified" and None in (req.teacher_accuracy, req.teacher_reasoning, req.teacher_clarity):
+        raise HTTPException(400, "A modified review needs all three teacher scores.")
+    try:
+        review_id = await log_teacher_review(
+            session_id=req.session_id, turn_id=req.turn_id,
+            teacher_accuracy=req.teacher_accuracy, teacher_reasoning=req.teacher_reasoning, teacher_clarity=req.teacher_clarity,
+            teacher_feedback=req.teacher_feedback, teacher_notes=req.teacher_notes, action=req.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if review_id is None:
+        raise HTTPException(404, "Turn not found in this session.")
     return {"review_id": review_id, "status": "logged"}
 
 

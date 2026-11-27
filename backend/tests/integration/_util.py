@@ -44,6 +44,7 @@ def run_isolated(coro_func):
 async def cleanup_session(session_id: str) -> None:
     """Remove a test session's Postgres rows + Redis key."""
     async with database.get_engine().begin() as conn:
+        await conn.execute(text("DELETE FROM teacher_reviews WHERE session_id=:s"), {"s": session_id})
         await conn.execute(text("DELETE FROM exam_turns WHERE session_id=:s"), {"s": session_id})
         await conn.execute(text("DELETE FROM exam_sessions WHERE session_id=:s"), {"s": session_id})
     await redis_client.get_redis().delete(f"exam:{session_id}")

@@ -10,6 +10,10 @@ from langgraph.graph import StateGraph, END
 from app.core import llm
 from app.core.memory import get_checkpointer
 
+import logging
+
+logger = logging.getLogger("quantummind.agents.theory")
+
 # ── STATE ─────────────────────────────────────────────────────
 class TheoryAgentState(TypedDict):
     messages:       Annotated[list[BaseMessage], operator.add]
@@ -45,10 +49,18 @@ Modern Qiskit syntax (use ONLY these):
   counts = job.result().get_counts()"""
 
 
+# Earlier turns replayed into an answer, on both the graph (/chat) and the
+# streamed path. Only the most recent are sent, so a long conversation can't
+# outgrow the model's context window.
+MAX_HISTORY_MESSAGES = 12
+
+
 async def generate_response(state: TheoryAgentState) -> dict:
     """Single node — one LLM call handles everything."""
-    messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"]
-    print(f"[TheoryAgent] Generating response (1 LLM call)")
+    # The checkpointer keeps the whole thread; only the most recent turns are
+    # replayed, so a long conversation can't outgrow the context window.
+    messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"][-MAX_HISTORY_MESSAGES:]
+    logger.info(f"Generating response (1 LLM call)")
     response = await llm.chat(messages, call_type="theory")
     return {
         "final_response": response,
@@ -83,17 +95,22 @@ async def run_theory_agent(
     result = await get_theory_graph().ainvoke(initial, config=config)
     return result.get("final_response", "")
 
+
+
 async def stream_theory_agent(
     user_message: str,
     chat_history: list | None = None,
     thread_id: str = "default",
 ):
-    """Stream directly from LLM — no waiting for full response."""
-    # Build message history from checkpointer if available
+    """Stream directly from the LLM — no waiting for the full response.
+
+    Token streaming bypasses the graph, so memory on this path is the recent
+    history the client sends, not the checkpointer.
+    """
     messages = [SystemMessage(content=THEORY_SYSTEM)]
 
-    # Add chat history for context
-    for msg in (chat_history or []):
+    # Add recent chat history for context
+    for msg in (chat_history or [])[-MAX_HISTORY_MESSAGES:]:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "ai":
@@ -101,6 +118,6 @@ async def stream_theory_agent(
 
     messages.append(HumanMessage(content=user_message))
 
-    print(f"[TheoryAgent] Streaming response (1 LLM call)")
+    logger.info(f"Streaming response (1 LLM call)")
     async for token in llm.stream(messages, call_type="theory"):
         yield token

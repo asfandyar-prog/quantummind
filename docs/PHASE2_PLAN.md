@@ -1,5 +1,10 @@
 # Phase 2 — Resilience Around the LLM (Plan)
 
+> **Historical plan (status 2026-11-27).** This phase is implemented and on `main`. The
+> "current reality" sections below describe the code *before* this phase, not today.
+> For current behaviour see [`README.md`](../README.md) and
+> [`PROJECT_EXPLAINED.md`](PROJECT_EXPLAINED.md).
+
 > Plan only. No code until approved. Grounded in the current code: the LLM seam
 > (`core/llm.py`), the agents that call it, and the Phase 1 exam flow
 > (`routes/exam.py` + `core/exam_state.py` + `db/audit_db.py`).

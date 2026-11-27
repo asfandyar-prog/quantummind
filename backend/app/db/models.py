@@ -29,6 +29,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -65,6 +66,11 @@ class ExamSession(Base):
 
 class ExamTurn(Base):
     __tablename__ = "exam_turns"
+    # One row per (session, turn). A double-submitted answer cannot be recorded
+    # twice, whichever path writes it (graded, pending, or backfill).
+    __table_args__ = (
+        UniqueConstraint("session_id", "turn_number", name="uq_exam_turns_session_turn"),
+    )
 
     turn_id: Mapped[str] = mapped_column(String, primary_key=True)
     session_id: Mapped[str] = mapped_column(

@@ -1,5 +1,10 @@
 # Phase 0 — LLM Abstraction Layer (Plan)
 
+> **Historical plan (status 2026-11-27).** This phase is implemented and on `main`. The
+> "current reality" sections below describe the code *before* this phase, not today.
+> For current behaviour see [`README.md`](../README.md) and
+> [`PROJECT_EXPLAINED.md`](PROJECT_EXPLAINED.md).
+
 > Plan only. No code in this document and none to be written until approved. This plan is
 > written against the **real** repo (see [`RECONCILIATION.md`](RECONCILIATION.md)): the
 > system is 100% Groq via `langchain-groq`, there is **no** OpenAI client and **no**

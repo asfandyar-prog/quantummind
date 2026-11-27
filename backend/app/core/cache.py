@@ -1,18 +1,22 @@
 # ── app/core/cache.py ─────────────────────────────────────────
 # In-memory LRU cache for LLM responses.
-# Caches: lesson plans (expensive, deterministic per topic)
-#         theory responses to common questions
-# Does NOT cache: code execution (always different), grading (personalized)
+# Caches: lesson plans (expensive, deterministic per topic) — its only user today.
+# Does NOT cache: theory answers, code execution (always different), grading (personalized)
 
 import hashlib
 import time
 from collections import OrderedDict
 from typing import Optional
 
+import logging
+
+logger = logging.getLogger("quantummind.cache")
+
 
 class LRUCache:
     """
-    Thread-safe LRU cache with TTL expiry.
+    LRU cache with TTL expiry, per process. Not thread-safe: fine for the single
+    asyncio event loop the app runs it on.
     Uses OrderedDict for O(1) access + eviction.
 
     Why not Redis? No infrastructure needed. For a single-server
@@ -46,7 +50,7 @@ class LRUCache:
         # Move to end (most recently used)
         self._cache.move_to_end(key)
         self._hits += 1
-        print(f"[Cache] HIT {namespace} — total hits: {self._hits}")
+        logger.info(f"HIT {namespace} — total hits: {self._hits}")
         return value
 
     def set(self, namespace: str, content: str, value: str) -> None:
@@ -74,7 +78,6 @@ cache = LRUCache(max_size=200, ttl_seconds=3600)
 
 # What gets cached:
 # "plan:{topic_hash}"    → JSON lesson plan (1hr TTL — same topic = same plan)
-# "theory:{question_hash}" → theory responses for common questions (1hr TTL)
 # What does NOT get cached:
 # Code generation — always personalized
 # Grading — always personalized to student answer

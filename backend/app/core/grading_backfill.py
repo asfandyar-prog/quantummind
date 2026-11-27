@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.llm_errors import LLMUnavailable, LLMBusy
 from app.agents.exam_agent import (
     grade_answer, generate_question, decide_followup, identify_weak_areas,
+    GradingFailed, ungraded_result, average_score,
 )
 from app.db import audit_db
 from app.core import exam_state
@@ -51,6 +52,8 @@ async def reconcile_session(session_id: str) -> None:
             grading = await grade_answer(topic, stuck["question"], stuck["student_answer"])
         except (LLMUnavailable, LLMBusy):
             return  # still down — try again next sweep
+        except GradingFailed:
+            grading = ungraded_result()  # finalize with no scores; retrying would loop forever
         claimed = await audit_db.finalize_grade(
             stuck["turn_id"], grading["accuracy"], grading["reasoning"],
             grading["clarity"], grading["justification"], grading["ideal_answer"],
@@ -62,22 +65,20 @@ async def reconcile_session(session_id: str) -> None:
 
     # ── Step 2: advance (graded, but session not advanced) ──────────────────
     weak_areas: list[str] = []
-    total_score = 0.0
     prev_qa: list[dict] = []
     for t in turns:
-        total_score += t["score_total"] or 0.0
         prev_qa.append({"question": t["question"], "answer": t["student_answer"], "score": t["score_total"]})
-        for a in identify_weak_areas(
-            t["score_accuracy"] or 0.0, t["score_reasoning"] or 0.0, t["score_clarity"] or 0.0
-        ):
+        if t["score_total"] is None:
+            continue  # an ungraded answer carries no weak-area signal
+        for a in identify_weak_areas(t["score_accuracy"], t["score_reasoning"], t["score_clarity"]):
             if a not in weak_areas:
                 weak_areas.append(a)
 
-    stuck_weak = identify_weak_areas(
-        stuck["score_accuracy"] or 0.0, stuck["score_reasoning"] or 0.0, stuck["score_clarity"] or 0.0
+    stuck_weak = [] if stuck["score_total"] is None else identify_weak_areas(
+        stuck["score_accuracy"], stuck["score_reasoning"], stuck["score_clarity"]
     )
     decision = decide_followup(
-        score_total=stuck["score_total"] or 0.0, version=version,
+        score_total=stuck["score_total"], version=version,
         followup_count=row["followup_count"], turn_number=cur, weak_areas=stuck_weak,
     )
     max_q = 5 if version == "V1" else 10
@@ -100,7 +101,7 @@ async def reconcile_session(session_id: str) -> None:
                 session_id, cur, nq, cur + 1, False, 0
             )
         else:
-            avg = round(total_score / len(turns), 2) if turns else 0.0
+            avg = average_score(t["score_total"] for t in turns)
             advanced = await audit_db.complete_if(session_id, cur, avg, len(turns))
     except (LLMUnavailable, LLMBusy):
         return  # graded but couldn't advance — next sweep advances
@@ -110,9 +111,34 @@ async def reconcile_session(session_id: str) -> None:
         logger.info("backfill reconciled session=%s turn=%s", session_id, cur)
 
 
+async def grade_ended_turn(turn: dict) -> None:
+    """Grade an answer whose session ended before it was graded.
+
+    Grade only: the session is over, so there is nothing to advance. Then fold the
+    late grade into the session's average.
+    """
+    row = await audit_db.get_session_row(turn["session_id"])
+    if row is None:
+        return
+    try:
+        grading = await grade_answer(row["topic"], turn["question"], turn["student_answer"])
+    except (LLMUnavailable, LLMBusy):
+        return  # still down — try again next sweep
+    except GradingFailed:
+        grading = ungraded_result()  # finalize with no scores; retrying would loop forever
+    claimed = await audit_db.finalize_grade(
+        turn["turn_id"], grading["accuracy"], grading["reasoning"],
+        grading["clarity"], grading["justification"], grading["ideal_answer"],
+    )
+    if claimed:
+        await audit_db.refresh_session_average(turn["session_id"])
+        logger.info("backfill graded turn=%s of ended session=%s", turn["turn_id"], turn["session_id"])
+
+
 async def sweep() -> None:
     try:
         pending = await audit_db.get_pending_turns(settings.grading_backfill_batch)
+        ended = await audit_db.get_ungraded_turns_of_ended_sessions(settings.grading_backfill_batch)
     except Exception as exc:
         logger.warning("backfill sweep query failed: %s", exc)
         return
@@ -121,6 +147,11 @@ async def sweep() -> None:
             await reconcile_session(t["session_id"])
         except Exception as exc:
             logger.warning("backfill reconcile failed for %s: %s", t["session_id"], exc)
+    for t in ended:
+        try:
+            await grade_ended_turn(t)
+        except Exception as exc:
+            logger.warning("backfill grading failed for ended session %s: %s", t["session_id"], exc)
 
 
 async def _loop() -> None:

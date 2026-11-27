@@ -5,6 +5,7 @@ the sandbox image) is unavailable — so they skip locally on a box without Dock
 but RUN in CI, where the workflow builds the image first. An untested sandbox is
 not a sandbox.
 """
+import os
 import shutil
 import subprocess
 
@@ -32,10 +33,17 @@ def _docker_ready():
 
 DOCKER_OK, SKIP_REASON = _docker_ready()
 
+# CI sets REQUIRE_SANDBOX=1 so a missing Docker daemon or image fails the run
+# instead of silently skipping the one suite that proves containment.
+if not DOCKER_OK and os.environ.get("REQUIRE_SANDBOX") == "1":
+    raise RuntimeError(f"REQUIRE_SANDBOX=1 but the sandbox is unavailable: {SKIP_REASON}")
+
 
 @pytest.fixture(autouse=True)
 def require_docker_sandbox():
     if not DOCKER_OK:
         pytest.skip(f"sandbox containment tests need Docker + image: {SKIP_REASON}")
+    previous = settings.executor
     settings.executor = "docker"   # exercise the real container backend
     yield
+    settings.executor = previous   # don't leak the backend into later tests

@@ -58,18 +58,20 @@ async def load_active(session_id: str) -> Optional[dict]:
     total_score = 0.0
     weak_areas: list[str] = []
     for t in turns_raw:
-        score = t["score_total"] or 0.0
+        score = t["score_total"]   # None: grading pending, or an answer that couldn't be graded
         turns.append({
             "question": t["question"],
             "answer":   t["student_answer"],
             "score":    score,
             "turn_id":  t["turn_id"],
         })
+        if score is None:
+            continue
         total_score += score
         for area in identify_weak_areas(
-            t["score_accuracy"] or 0.0,
-            t["score_reasoning"] or 0.0,
-            t["score_clarity"] or 0.0,
+            t["score_accuracy"],
+            t["score_reasoning"],
+            t["score_clarity"],
         ):
             if area not in weak_areas:
                 weak_areas.append(area)

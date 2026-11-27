@@ -105,3 +105,28 @@ def test_no_secrets_or_app_in_sandbox():
     assert r.success, r.stderr
     assert "LEAKED: []" in r.stdout                   # no secrets reach the sandbox
     assert "APP_ABSENT" in r.stdout                   # app code is not present
+
+
+def test_fork_bomb_is_contained():
+    # --pids-limit caps processes and threads in the container. Children sleep so
+    # they keep counting against the cap, and os.fork() then fails with EAGAIN.
+    # SANDBOX_START proves the code ran, so a container that never started can't
+    # pass as contained.
+    code = (
+        "import os, time\n"
+        "print('SANDBOX_START', flush=True)\n"
+        "forked = 0\n"
+        "try:\n"
+        "    while forked < 1000:\n"
+        "        if os.fork() == 0:\n"
+        "            time.sleep(60)\n"
+        "            os._exit(0)\n"
+        "        forked += 1\n"
+        "    print('UNBOUNDED', forked, flush=True)\n"
+        "except OSError:\n"
+        "    print('FORK_LIMITED', forked, flush=True)\n"
+    )
+    r = _run(code, timeout=30)
+    assert "SANDBOX_START" in r.stdout
+    assert "FORK_LIMITED" in r.stdout                 # the cap stopped it
+    assert "UNBOUNDED" not in r.stdout

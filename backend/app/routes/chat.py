@@ -1,4 +1,6 @@
 # ── app/routes/chat.py ────────────────────────────────────────
+import uuid
+
 from fastapi import APIRouter, HTTPException
 # APIRouter is like a mini FastAPI app.
 # Instead of putting all routes in main.py, we split them into
@@ -14,6 +16,10 @@ from pydantic import BaseModel, Field
 # Field: adds validation rules and documentation to fields.
 
 from app.agents.orchestrator import run_agent
+
+import logging
+
+logger = logging.getLogger("quantummind.routes.chat")
 
 
 # ── Request / Response models ─────────────────────────────────
@@ -43,6 +49,14 @@ class ChatRequest(BaseModel):
     chat_history: list[MessageDict] = Field(
         default=[],
         description="Previous conversation turns for context"
+    )
+
+    week: int = Field(default=0, ge=0, le=13, description="Course week to search (0 = all weeks)")
+
+    thread_id: str = Field(
+        default_factory=lambda: f"chat-{uuid.uuid4().hex}",
+        description="Conversation id for checkpointed memory. Omit it and the call "
+                    "gets a fresh thread, never one shared with other callers.",
     )
 
 
@@ -83,6 +97,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
             user_message=request.message,
             chat_history=history,
             mode=request.mode,
+            thread_id=request.thread_id,
+            week=request.week,
         )
 
         # We don't have a clean way to get agent_used from run_agent yet.
@@ -96,7 +112,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         # Catch ALL exceptions so the server never returns a raw 500 error.
         # Raw 500s expose stack traces to the frontend — a security risk.
         # HTTPException gives a clean JSON error response instead.
-        print(f"[/chat] Error: {e}")
+        logger.exception(f"Error: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Agent error: {str(e)}"
@@ -112,30 +128,20 @@ async def chat_health():
 @router.get("/history/{thread_id}")
 async def get_history(thread_id: str):
     """
-    Returns the conversation history for a thread_id.
-    Called by the frontend on page load to restore previous messages.
+    Returns the conversation the LangGraph checkpointer stored for a thread, as
+    [{role, content}] in order. Empty when the thread has no checkpoint.
     """
     from app.core.memory import get_checkpointer
-    try:
-        cp = get_checkpointer()
-        if cp is None:
-            return {"messages": []}
 
-        config = {"configurable": {"thread_id": thread_id}}
-        checkpoint = await cp.aget(config)
+    cp = get_checkpointer()
+    if cp is None:
+        return {"thread_id": thread_id, "messages": []}
 
-        if not checkpoint:
-            return {"messages": []}
-
-        # Extract messages from checkpoint state
-        # LangGraph stores the full state — we pull chat_history
-        state = checkpoint.get("channel_values", {})
-        messages = []
-
-        # Reconstruct from the agent's final responses
-        # We look for user messages and AI responses in the state
-        return {"messages": messages, "found": True}
-
-    except Exception as e:
-        print(f"[/history] Error: {e}")
-        return {"messages": []}
+    checkpoint = await cp.aget({"configurable": {"thread_id": thread_id}})
+    stored = (checkpoint or {}).get("channel_values", {}).get("messages", [])
+    messages = [
+        {"role": "user" if m.type == "human" else "ai", "content": m.content}
+        for m in stored
+        if m.type in ("human", "ai")
+    ]
+    return {"thread_id": thread_id, "messages": messages}
