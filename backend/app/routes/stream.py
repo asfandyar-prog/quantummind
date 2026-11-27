@@ -31,7 +31,7 @@ class StreamRequest(BaseModel):
     chat_history: list[HistoryMessage] = Field(default=[], max_length=50)
     # Omit it and the request gets a fresh thread, never one shared with other callers.
     thread_id:    str                  = Field(default_factory=lambda: f"stream-{uuid.uuid4().hex}")
-    week:         int                  = Field(default=0)
+    week:         int                  = Field(default=0, ge=0, le=13)   # RAG: course week, 0 = all
 
 
 def sse_event(data: dict) -> str:
@@ -48,7 +48,7 @@ async def stream_response(request: StreamRequest):
                 "theory":   "Thinking about your question…",
                 "practice": "Analyzing your code…",
                 "guided":   "Preparing your lesson…",
-                "course":   "Thinking about your question…",  # no retrieval while RAG is unrouted
+                "course":   "Thinking about your question…",  # the router decides whether to search
             }
             progress_msg = mode_labels.get(request.mode, "Processing…")
             yield sse_event({"type": "progress", "content": progress_msg})

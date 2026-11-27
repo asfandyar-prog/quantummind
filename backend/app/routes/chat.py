@@ -51,6 +51,8 @@ class ChatRequest(BaseModel):
         description="Previous conversation turns for context"
     )
 
+    week: int = Field(default=0, ge=0, le=13, description="Course week to search (0 = all weeks)")
+
     thread_id: str = Field(
         default_factory=lambda: f"chat-{uuid.uuid4().hex}",
         description="Conversation id for checkpointed memory. Omit it and the call "
@@ -96,6 +98,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             chat_history=history,
             mode=request.mode,
             thread_id=request.thread_id,
+            week=request.week,
         )
 
         # We don't have a clean way to get agent_used from run_agent yet.

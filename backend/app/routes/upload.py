@@ -15,11 +15,8 @@ from fastapi.responses import JSONResponse
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-
 from app.core.auth import require_teacher
-from app.core.config import settings
+from app.core.vectorstore import CHROMA_DIR, get_vectorstore
 
 import logging
 
@@ -27,25 +24,12 @@ logger = logging.getLogger("quantummind.routes.upload")
 
 router = APIRouter()
 
-# ── ChromaDB path ─────────────────────────────────────────────
-# Single source of truth: CHROMA_PATH via settings. Previously computed here
-# from __file__ and again in rag_agent.py, so CHROMA_PATH was silently ignored.
-CHROMA_DIR = settings.chroma_dir
-os.makedirs(CHROMA_DIR, exist_ok=True)
+# The vector store and embedding model live in app/core/vectorstore.py, shared
+# with the RAG workflow: one CHROMA_PATH, one model loaded once per process.
 
 # Course material comes from teachers. Without a cap, one large file is read
 # fully into memory before anything else happens.
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-
-# ── Embeddings model ──────────────────────────────────────────
-# all-MiniLM-L6-v2: small (80MB), fast, runs locally, free.
-# Downloads once on first use, cached after that.
-def get_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
 
 # ── Text splitter ─────────────────────────────────────────────
 # Splits documents into overlapping chunks.
@@ -56,15 +40,6 @@ text_splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=100,
     separators=["\n\n", "\n", ".", " "],
 )
-
-
-def get_vectorstore():
-    """Returns the ChromaDB vector store."""
-    return Chroma(
-        persist_directory=CHROMA_DIR,
-        embedding_function=get_embeddings(),
-        collection_name="quantummind_course",
-    )
 
 
 @router.post("/upload", dependencies=[Depends(require_teacher)])
