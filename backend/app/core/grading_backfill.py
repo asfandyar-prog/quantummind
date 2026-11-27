@@ -111,9 +111,34 @@ async def reconcile_session(session_id: str) -> None:
         logger.info("backfill reconciled session=%s turn=%s", session_id, cur)
 
 
+async def grade_ended_turn(turn: dict) -> None:
+    """Grade an answer whose session ended before it was graded.
+
+    Grade only: the session is over, so there is nothing to advance. Then fold the
+    late grade into the session's average.
+    """
+    row = await audit_db.get_session_row(turn["session_id"])
+    if row is None:
+        return
+    try:
+        grading = await grade_answer(row["topic"], turn["question"], turn["student_answer"])
+    except (LLMUnavailable, LLMBusy):
+        return  # still down — try again next sweep
+    except GradingFailed:
+        grading = ungraded_result()  # finalize with no scores; retrying would loop forever
+    claimed = await audit_db.finalize_grade(
+        turn["turn_id"], grading["accuracy"], grading["reasoning"],
+        grading["clarity"], grading["justification"], grading["ideal_answer"],
+    )
+    if claimed:
+        await audit_db.refresh_session_average(turn["session_id"])
+        logger.info("backfill graded turn=%s of ended session=%s", turn["turn_id"], turn["session_id"])
+
+
 async def sweep() -> None:
     try:
         pending = await audit_db.get_pending_turns(settings.grading_backfill_batch)
+        ended = await audit_db.get_ungraded_turns_of_ended_sessions(settings.grading_backfill_batch)
     except Exception as exc:
         logger.warning("backfill sweep query failed: %s", exc)
         return
@@ -122,6 +147,11 @@ async def sweep() -> None:
             await reconcile_session(t["session_id"])
         except Exception as exc:
             logger.warning("backfill reconcile failed for %s: %s", t["session_id"], exc)
+    for t in ended:
+        try:
+            await grade_ended_turn(t)
+        except Exception as exc:
+            logger.warning("backfill grading failed for ended session %s: %s", t["session_id"], exc)
 
 
 async def _loop() -> None:

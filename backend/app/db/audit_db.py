@@ -316,6 +316,37 @@ async def get_pending_turns(limit: int = 50) -> list[dict]:
     return [_turn_to_dict(t) for t in rows]
 
 
+async def get_ungraded_turns_of_ended_sessions(limit: int = 50) -> list[dict]:
+    """Answers still owed a grade whose session is no longer active: saved during
+    an outage, then the student ended the exam before the backfill caught up.
+    get_pending_turns only sees active sessions, so these need their own query."""
+    async with get_sessionmaker()() as session:
+        rows = (await session.execute(
+            select(ExamTurn)
+            .join(ExamSession, ExamSession.session_id == ExamTurn.session_id)
+            .where(ExamSession.status != "active", ExamTurn.graded.is_(False))
+            .limit(limit)
+        )).scalars().all()
+    return [_turn_to_dict(t) for t in rows]
+
+
+async def refresh_session_average(session_id: str) -> None:
+    """Recompute avg_score from the session's graded turns (ungradable ones,
+    with no score, are left out). Used after a late grade lands on an ended
+    session, whose average was computed without it."""
+    async with get_sessionmaker()() as session:
+        avg = (await session.execute(
+            select(func.avg(ExamTurn.score_total))
+            .where(ExamTurn.session_id == session_id, ExamTurn.score_total.is_not(None))
+        )).scalar()
+        await session.execute(
+            update(ExamSession)
+            .where(ExamSession.session_id == session_id)
+            .values(avg_score=round(float(avg), 2) if avg is not None else 0)
+        )
+        await session.commit()
+
+
 async def set_in_flight(
     session_id:          str,
     current_question:    str,
