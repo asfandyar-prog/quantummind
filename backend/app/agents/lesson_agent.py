@@ -213,6 +213,9 @@ GRADE_PROMPT = """Grade a student's quantum computing answer.
 
 {{"passed": true or false, "feedback": "one encouraging sentence"}}"""
 
+UNGRADED_FEEDBACK = "I couldn't grade that answer automatically. Please try again."
+
+
 async def grade_node(state: GradeState) -> dict:
     print(f"[LessonAgent/Grade] Grading (1 LLM call)")
     response = await llm.chat([
@@ -225,12 +228,17 @@ async def grade_node(state: GradeState) -> dict:
     try:
         raw = re.sub(r"```(?:json)?\n?", "", response).strip().rstrip("`").strip()
         result = json.loads(raw)
-        return {
-            "passed":   bool(result.get("passed", False)),
-            "feedback": str(result.get("feedback", "Good effort!")),
-        }
-    except:
-        return {"passed": True, "feedback": "Good effort! Let's continue."}
+        if not isinstance(result, dict):
+            raise ValueError("grader reply is not a JSON object")
+    except ValueError:
+        # Fail closed: an answer we couldn't grade is never a pass.
+        print("[LessonAgent/Grade] Unreadable grader reply — not passing the answer")
+        return {"passed": False, "feedback": UNGRADED_FEEDBACK}
+    return {
+        # Only a real JSON true passes; the strings "false" or "yes" do not.
+        "passed":   result.get("passed") is True,
+        "feedback": str(result.get("feedback") or ""),
+    }
 
 def build_grade_graph():
     g = StateGraph(GradeState)
