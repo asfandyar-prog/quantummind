@@ -51,3 +51,12 @@ def test_history_returns_the_stored_conversation(monkeypatch):
         {"role": "user", "content": "what is superposition?"},
         {"role": "ai", "content": "an answer"},
     ]
+
+
+def test_theory_graph_replays_only_recent_history(monkeypatch):
+    prompts = _setup(monkeypatch)
+    for i in range(10):
+        asyncio.run(chat(ChatRequest(message=f"turn {i}", mode="theory", thread_id="t-long")))
+    last = prompts[-1]
+    assert len(last) <= 1 + theory_agent.MAX_HISTORY_MESSAGES
+    assert "turn 9" in last and "turn 0" not in last   # old turns stop being replayed

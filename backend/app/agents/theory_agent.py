@@ -45,9 +45,17 @@ Modern Qiskit syntax (use ONLY these):
   counts = job.result().get_counts()"""
 
 
+# Earlier turns replayed into an answer, on both the graph (/chat) and the
+# streamed path. Only the most recent are sent, so a long conversation can't
+# outgrow the model's context window.
+MAX_HISTORY_MESSAGES = 12
+
+
 async def generate_response(state: TheoryAgentState) -> dict:
     """Single node — one LLM call handles everything."""
-    messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"]
+    # The checkpointer keeps the whole thread; only the most recent turns are
+    # replayed, so a long conversation can't outgrow the context window.
+    messages = [SystemMessage(content=THEORY_SYSTEM)] + state["messages"][-MAX_HISTORY_MESSAGES:]
     print(f"[TheoryAgent] Generating response (1 LLM call)")
     response = await llm.chat(messages, call_type="theory")
     return {
@@ -83,9 +91,6 @@ async def run_theory_agent(
     result = await get_theory_graph().ainvoke(initial, config=config)
     return result.get("final_response", "")
 
-# Earlier turns replayed into a streamed answer. Only the most recent are sent,
-# so a long conversation can't outgrow the model's context window.
-MAX_HISTORY_MESSAGES = 12
 
 
 async def stream_theory_agent(
