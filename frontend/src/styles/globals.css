@@ -1,14 +1,16 @@
-
-
+/* Tailwind v4 entry. The v3 directives (@tailwind base/components/utilities)
+   loaded no theme, so every spacing utility (px-12, gap-2, mb-3, inset-0 ...)
+   was silently missing. Import v4's theme and utilities explicitly; preflight
+   is left out on purpose, because the reset below already covers it and the
+   inline-styled pages were built without it. @import must come first. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
 
 /* Tailwind v4 does not auto-load tailwind.config.js. Without this directive the
    entire custom theme — qm-* colours, font-display, animate-fade-up — is
    silently dropped and those classes resolve to nothing. */
 @config "../../tailwind.config.js";
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 /* ── BASE RESET ──────────────────────────────────────────────── */
 @layer base {
