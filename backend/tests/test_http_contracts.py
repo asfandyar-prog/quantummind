@@ -69,3 +69,9 @@ def test_production_refuses_the_published_teacher_password():
     ok = Settings(_env_file=None, groq_api_key="k", app_env="production", executor="docker",
                   teacher_password="something-else")
     assert ok.app_env == "production"
+
+
+def test_execute_ignores_a_legacy_shots_field(monkeypatch):
+    monkeypatch.setattr(settings, "executor", "disabled")
+    res = client.post("/api/execute", json={"code": "print(1)", "shots": 4096})
+    assert res.status_code == 503          # reached the handler: shots was not a 422

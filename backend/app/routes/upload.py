@@ -62,7 +62,6 @@ async def upload_file(
     After uploading, the RAG agent can retrieve this content
     when a student asks questions in that week's lesson.
     """
-    allowed_types = ["application/pdf", "application/octet-stream", "text/plain"]
     allowed_extensions = [".pdf", ".ipynb", ".py", ".md"]
 
     filename = file.filename or ""
