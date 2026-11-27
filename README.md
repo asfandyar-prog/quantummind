@@ -648,7 +648,7 @@ AI reasoning scores → measure precision and recall as a vague-answer detector.
 | **RAG** *(ingest only)* | ChromaDB 0.5.18 + all-MiniLM-L6-v2 | Local · free · no API key. Torch pinned CPU-only to keep the image small. Uploads are written; nothing retrieves them |
 | **Code execution** | Qiskit 2.3 + Aer 0.17 in a locked-down container | Per-run container, no network, read-only FS, non-root, resource caps |
 | **Circuit diagrams** | matplotlib `qc.draw('mpl')` | base64 PNG returned straight to the frontend |
-| **Backend** | FastAPI 0.115 · SSE via `StreamingResponse` | Async · token streaming. `sse-starlette` is declared in `pyproject.toml` but unused |
+| **Backend** | FastAPI 0.115 · SSE via `StreamingResponse` | Async · token streaming |
 | **Frontend** | React 19 + Vite 6 + Tailwind 4 + Framer Motion 12 | Fast dev server · animated UI |
 | **State / routing** | Zustand 5 · React Router 7 | Minimal global store, no boilerplate |
 | **Editor** | Monaco (the VS Code engine) | Syntax highlighting · themes · resizable |
@@ -1019,7 +1019,6 @@ quantummind/
     └── src/
         ├── components/
         │   ├── LandingPage.jsx      # dark/light toggle
-        │   ├── SplashScreen.jsx     # not imported anywhere
         │   ├── MainApp.jsx · Sidebar.jsx · ModeSelector.jsx
         │   ├── ChatPanel.jsx        # streaming · progress indicators
         │   ├── CodeEditor.jsx       # Monaco + Run + circuit PNG
@@ -1028,8 +1027,7 @@ quantummind/
         │   ├── CoursePanel.jsx · CourseSidebar.jsx
         │   ├── ExamMode.jsx         # V1/V2/V3 + voice input
         │   ├── TeacherDashboard.jsx # review + override + research
-        │   ├── ui/                  # Badge · Button (Button is not imported)
-        │   └── _unused/             # parked components, not imported
+        │   └── ui/Badge.jsx
         ├── data/curriculum.js       # 13-week course structure
         ├── hooks/useAppState.js     # Zustand global state
         └── lib/                     # api.js (API_BASE) · chat.js (recent history)
