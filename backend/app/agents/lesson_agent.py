@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, END
 from app.core import llm
 from app.core.cache import cache
 from app.core.prompts import UNTRUSTED_DATA_RULE, delimit
+from app.core.structured import LessonGrade, ask_validated
 
 import logging
 
@@ -235,24 +236,15 @@ UNGRADED_FEEDBACK = "I couldn't grade that answer automatically. Please try agai
 
 async def grade_node(state: GradeState) -> dict:
     logger.info(f"Grading (1 LLM call)")
-    response = await llm.chat(
+    grade = await ask_validated(
         grade_messages(state["question"], state["correct_answer"], state["student_answer"]),
-        call_type="lesson_grade",
+        LessonGrade, call_type="lesson_grade",
     )
-    try:
-        raw = re.sub(r"```(?:json)?\n?", "", response).strip().rstrip("`").strip()
-        result = json.loads(raw)
-        if not isinstance(result, dict):
-            raise ValueError("grader reply is not a JSON object")
-    except ValueError:
+    if grade is None:
         # Fail closed: an answer we couldn't grade is never a pass.
-        logger.warning("Unreadable grader reply — not passing the answer")
+        logger.warning("Unreadable grader reply after one retry — not passing the answer")
         return {"passed": False, "feedback": UNGRADED_FEEDBACK}
-    return {
-        # Only a real JSON true passes; the strings "false" or "yes" do not.
-        "passed":   result.get("passed") is True,
-        "feedback": str(result.get("feedback") or ""),
-    }
+    return {"passed": grade.passed, "feedback": grade.feedback}
 
 def build_grade_graph():
     g = StateGraph(GradeState)

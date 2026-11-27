@@ -15,14 +15,12 @@
 #   score >= 5.0 → move to the next question
 # No LLM needed for this decision — saves latency and keeps it reproducible.
 
-import json
-import math
-import re
 from typing import Iterable, Optional, TypedDict
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from app.core import llm
 from app.core.prompts import UNTRUSTED_DATA_RULE, delimit
+from app.core.structured import ExamGrade, ask_validated, parse_model
 
 import logging
 
@@ -242,45 +240,13 @@ GRADE_RETRY_PROMPT = (
 )
 
 
-SCORE_KEYS = ("accuracy", "reasoning", "clarity")
-
-
 def parse_grade(reply: str) -> Optional[dict]:
-    """The grader's scores, or None if the reply isn't usable.
-
-    Tolerates code fences and prose around the JSON object. Each dimension must be
-    present and numeric, and is clamped to 0-10. A missing or non-numeric score is
-    never replaced with a default.
-    """
-    raw = re.sub(r"```(?:json)?", "", reply)
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end < start:
-        return None
-    try:
-        data = json.loads(raw[start:end + 1])
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
-        return None
-
-    scores = {}
-    for key in SCORE_KEYS:
-        value = data.get(key)
-        if isinstance(value, bool):
-            return None
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(number):
-            return None
-        scores[key] = min(10.0, max(0.0, number))
-
-    return {
-        **scores,
-        "justification": str(data.get("justification", "")),
-        "ideal_answer":  str(data.get("ideal_answer", "")),
-    }
+    """The grader's scores as a dict, or None if the reply doesn't validate as
+    ExamGrade (core/structured.py): fences and prose around the JSON are
+    tolerated, each score must be a finite number and is clamped to 0-10, and a
+    missing score is never replaced with a default."""
+    grade = parse_model(ExamGrade, reply)
+    return grade.model_dump() if grade is not None else None
 
 
 async def grade_answer_node(state: GradeState) -> dict:
@@ -291,20 +257,11 @@ async def grade_answer_node(state: GradeState) -> dict:
     """
     prompt = grade_messages(state["topic"], state["question"], state["student_answer"])
 
-    logger.info(f"Grading answer (1 LLM call)")
-    reply = await llm.chat(prompt, call_type="exam_grade")
-    result = parse_grade(reply)
-
-    if result is None:
-        logger.warning("Unusable grading reply — one corrective retry")
-        reply = await llm.chat(
-            [*prompt, AIMessage(content=reply), HumanMessage(content=GRADE_RETRY_PROMPT)],
-            call_type="exam_grade",
-        )
-        result = parse_grade(reply)
-
-    if result is None:
+    logger.info("Grading answer (1 LLM call, 2 if the reply needs a corrective retry)")
+    grade = await ask_validated(prompt, ExamGrade, call_type="exam_grade", correction=GRADE_RETRY_PROMPT)
+    if grade is None:
         raise GradingFailed("grader reply had no usable scores after one corrective retry")
+    result = grade.model_dump()
 
     acc, reas, clar = result["accuracy"], result["reasoning"], result["clarity"]
     total = round((acc + reas + clar) / 3, 2)

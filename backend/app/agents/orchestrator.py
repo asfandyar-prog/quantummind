@@ -1,16 +1,11 @@
 
 
 # ── app/agents/orchestrator.py ────────────────────────────────
-import json
-# json is Python's built-in JSON parser.
-# We use it to parse the Orchestrator's routing decision.
-# The LLM outputs a JSON string → json.loads() converts it to a dict.
-
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from app.core import llm
 from app.core.config import settings
 from app.core.prompts import ORCHESTRATOR_PROMPT
+from app.core.structured import RouteDecision, ask_validated
 from app.agents.theory_agent import run_theory_agent, stream_theory_agent
 from app.agents.code_agent import run_code_agent, stream_code_agent
 
@@ -32,8 +27,8 @@ async def route(user_message: str) -> str:
 
     Returns the agent name as a string: "theory", "code", "rag", or "review"
 
-    This function is defensive — if the LLM returns invalid JSON,
-    or an unknown agent name, we fall back to "theory" rather than crashing.
+    The reply is validated as RouteDecision (core/structured.py). An invalid
+    reply gets one corrective retry; if that fails too, we fall back to "theory".
     Defensive programming is critical in production AI systems because
     LLMs can occasionally produce unexpected output.
     """
@@ -42,33 +37,15 @@ async def route(user_message: str) -> str:
         HumanMessage(content=user_message),
     ]
 
-    raw_response = await llm.chat(messages, call_type="route", model=settings.llm_router_model)
-    # raw_response is a string like: '{"agent": "theory", "reason": "..."}'
-
-    try:
-        parsed = json.loads(raw_response)
-        # json.loads converts the JSON string to a Python dict:
-        # {"agent": "theory", "reason": "Conceptual question"}
-
-        agent = parsed.get("agent", DEFAULT_AGENT)
-        # .get() with a default is safer than parsed["agent"]
-        # If "agent" key is missing, we get DEFAULT_AGENT instead of KeyError
-
-        reason = parsed.get("reason", "No reason provided")
-
-        if agent not in VALID_AGENTS:
-            # LLM returned a valid JSON but with an unknown agent name
-            logger.warning(f"Unknown agent '{agent}', falling back to '{DEFAULT_AGENT}'")
-            return DEFAULT_AGENT
-
-        logger.info(f"Routing to '{agent}': {reason}")
-        return agent
-
-    except json.JSONDecodeError:
-        # LLM didn't return valid JSON — this can happen occasionally
-        logger.warning(f"Failed to parse routing decision: {raw_response}")
-        logger.warning(f"Falling back to '{DEFAULT_AGENT}'")
+    decision = await ask_validated(
+        messages, RouteDecision, call_type="route", model=settings.llm_router_model,
+    )
+    if decision is None:
+        # Fail closed to the safe default: Theory answers without running code.
+        logger.warning(f"Router reply invalid after one retry, falling back to '{DEFAULT_AGENT}'")
         return DEFAULT_AGENT
+    logger.info(f"Routing to '{decision.agent}': {decision.reason}")
+    return decision.agent
 
 
 # Router label → the workflow that actually handles it. One table, used by both
