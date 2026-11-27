@@ -1,5 +1,10 @@
 # Phase 1 — Durable & Shared State (Plan)
 
+> **Historical plan (status 2026-11-27).** This phase is implemented and on `main`. The
+> "current reality" sections below describe the code *before* this phase, not today.
+> For current behaviour see [`README.md`](../README.md) and
+> [`PROJECT_EXPLAINED.md`](PROJECT_EXPLAINED.md).
+
 > Plan only. No code until approved. Grounded in the current code as of this writing
 > (re-read `db/audit_db.py`, `core/memory.py`, `routes/exam.py`, `core/config.py`,
 > `pyproject.toml`, and the checkpointer wiring across the agents). This is the

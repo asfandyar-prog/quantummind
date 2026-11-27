@@ -1,5 +1,11 @@
 # Phase 3 — Secure Code Execution (Plan)
 
+> **Historical plan (status 2026-11-27).** This phase is implemented and on `main`, but
+> `EXECUTOR=disabled` on the Railway deploy, so the sandbox runs only locally and in CI. The
+> "current reality" sections below describe the code *before* this phase, not today.
+> For current behaviour see [`README.md`](../README.md) and
+> [`PROJECT_EXPLAINED.md`](PROJECT_EXPLAINED.md).
+
 > Plan only. No code until approved. Grounded in the two real execution sites:
 > `routes/execute.py` (`/api/execute`, Practice mode — student code) and
 > `agents/code_agent.py` (the `execute_code` node — LLM-generated code).

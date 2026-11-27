@@ -313,17 +313,29 @@ serving; resolve the duplicates by hand and redeploy.
    and refused in production while it's the default, but no rate limiting, no
    lockout, no accounts. A review records what changed, not who changed it.
 4. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
-   Groq tokens per call.
+   Groq tokens per call. The Redis limiter caps concurrent calls, not requests
+   per client, and no input has a length cap.
+5. **The per-call LLM records never reach Railway's logs.** They're written with
+   `logger.info`, and the app configures no logging, so Python drops them. What
+   you see in the logs is `print()` output and warnings. Use the Redis counters
+   (`llm:tokens:total:<date>`, `llm:calls:<date>`) for usage.
+6. **Guided-mode grading isn't trustworthy.** An unreadable grader reply counts as
+   a pass, and the answer key goes to the browser and comes back in the request.
 
 **Fragile under load:**
 
-5. **Single worker only** — the lesson-plan cache and executor semaphore are
+7. **Single worker only** — the lesson-plan cache and executor semaphore are
    per-process. See the comment in `backend/Dockerfile`.
-6. **Duplicate backfill work across workers.** Grading writes are idempotent, but
+8. **Duplicate backfill work across workers.** Grading writes are idempotent, but
    two workers can both call the LLM for the same pending answer.
+9. **Uploads block the server.** Embedding runs synchronously inside the async
+   `/api/upload` route, so other requests wait while a large file is embedded.
 
 **Smaller:**
 
-7. `/api/cache/stats` needs no auth (it exposes only hit counts).
-8. Streamed answers are counted by call and latency; the Groq client isn't asked
-   to report token usage in streams.
+10. `/api/cache/stats` needs no auth (it exposes only hit counts).
+11. Streamed answers are counted by call and latency; the Groq client isn't asked
+    to report token usage in streams.
+12. `backend/railway.toml` says the first boot downloads the embedding model. It
+    doesn't: the model is loaded on the first upload (§7), so boot is not slowed
+    by it.
