@@ -52,7 +52,7 @@ def test_unusable_reply_gets_one_corrective_retry(monkeypatch):
     res = asyncio.run(exam_agent.grade_answer("entanglement", "What is a Bell state?", "an answer"))
     assert len(calls) == 2
     assert res["total"] == pytest.approx(8.0)
-    assert type(calls[1][1]).__name__ == "AIMessage"   # the bad reply is shown back to the model
+    assert type(calls[1][-2]).__name__ == "AIMessage"  # the bad reply is shown back to the model
 
 
 def test_grading_fails_instead_of_inventing_scores(monkeypatch):
