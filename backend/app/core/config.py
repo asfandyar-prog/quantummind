@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     db_pool_size: int = 10                          # async engine pool size
     db_max_overflow: int = 5                        # pool overflow ceiling
     exam_state_ttl_seconds: int = 86400             # Redis safety TTL (Postgres is source of truth)
+    lesson_plan_ttl_seconds: int = 86400            # how long a lesson's server-side answer key lives
 
     @property
     def chroma_dir(self) -> str:
