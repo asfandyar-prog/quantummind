@@ -31,8 +31,9 @@ preDeployCommand = ["alembic upgrade head"]
 # were reachable at boot".
 healthcheckPath = "/health"
 
-# Generous: the first boot downloads the all-MiniLM-L6-v2 embedding model
-# and imports torch, which is slow on a cold container.
+# Generous. Boot itself doesn't load the embedding model or torch: those load
+# on the first upload or RAG question (app/core/vectorstore.py). The headroom
+# covers a slow cold start and the Postgres/Redis checks in the lifespan.
 healthcheckTimeout = 300
 
 # Restart on crash, but stop after 10 tries so a genuinely broken deploy

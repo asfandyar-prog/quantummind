@@ -197,7 +197,7 @@ export default function LandingPage() {
               {[
                 { label: 'AI Framework', value: 'LLM router + LangGraph workflows', color: '#007AFF' },
                 { label: 'LLM',          value: 'Groq · Llama 3.1 8B',           color: '#5856D6' },
-                { label: 'RAG',          value: 'ChromaDB ingest (retrieval not wired in yet)', color: '#34C759' },
+                { label: 'RAG',          value: 'ChromaDB, filtered by course week', color: '#34C759' },
                 { label: 'Execution',    value: 'Qiskit Aer in a Docker sandbox (local only)', color: '#FF9500' },
                 { label: 'Streaming',    value: 'FastAPI server-sent events',    color: '#32ADE6' },
               ].map((item, i) => (

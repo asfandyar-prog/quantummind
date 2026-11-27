@@ -3,12 +3,13 @@
 A study guide to this repository: what it is, how each request flows through it, what
 every technology is doing and where, what's live, what's dead and what's broken.
 
-Written against branch `docs/honest-readme`, which sits on `fix/review-findings`.
-Where `main` differs, it says so. Citations are `file:line` from the repo root; they
-were checked on 2026-11-27 and will drift as the code changes.
+Written against branch `docs/honest-readme` (commit `000f2a1`), which sits on
+`fix/review-findings`, and updated for the fixes on `fix/pre-interview`; see
+section 0. Where `main` differs, it says so. Citations are `file:line` at `000f2a1`.
 
 **Contents**
 
+0. [What changed on fix/pre-interview](#0-what-changed-on-fixpre-interview-read-this-first)
 1. [Summary](#1-summary)
 2. [Architecture and request paths](#2-architecture-and-request-paths)
 3. [Technologies: what, where, why](#3-technologies-what-where-why)
@@ -19,21 +20,56 @@ were checked on 2026-11-27 and will drift as the code changes.
 
 ---
 
+## 0. What changed on `fix/pre-interview` (read this first)
+
+Sections 1–7 were written against `docs/honest-readme` (commit `000f2a1`), and their
+`file:line` citations point at that commit: run `git show 000f2a1:<path>` to read
+exactly what they cite. The passages below whose *behaviour* changed have been
+rewritten; everything else describes code that still works the same way.
+
+| Item | What changed | Commit |
+|---|---|---|
+| Landing / mode copy | 36 students; no "Five AI agents", IBM Quantum, "instant AI review" or DeepMind/ETH comparison | `f61ee33` |
+| Tailwind | v4 theme + utilities imported explicitly; spacing utilities were missing | `e8c4950` |
+| Dead UI files, `sse-starlette` | Deleted | `c2cbd26` |
+| B4a lesson grader | Fails closed; only JSON `true` passes | `de4f1b8` |
+| A2 lesson answer key | Plan stored in Redis by `plan_id`; browser never sees `check_answer`; `/lesson/grade` takes `plan_id` + `step_num` + answer only | `64b89a4` |
+| B5 prompt injection | Rubric in a system message; student text in escaped `<tags>` everywhere it enters a prompt | `6b27ae9` |
+| A3 `/exam/start` | First question generated before any write; LLM outage → `503`, nothing stored | `7cda94b` |
+| A4 ending early | Backfill also grades ungraded turns of ended sessions and refreshes their average | `7f1ea77` |
+| A1 routing | One `WORKFLOW_FOR_LABEL` table for `/chat` and `/stream`; `review` → Code on both | `4951462` |
+| A6 upload | Ingestion runs in `asyncio.to_thread` | `0780f94` |
+| B1 leftover | Theory graph replays only the last 12 checkpointed messages | `8edb518` |
+| B6 logging | JSON logs on stdout, `LOG_LEVEL`, request-id middleware; prints replaced; `llm_call` records now visible | `0dda819` |
+| Structured output | Router, lesson-grade and exam-grade replies validated with Pydantic; one re-ask; fail closed | `e69460b` |
+| RAG | `rag` label → RAG workflow on both paths, `week` passed through; shared, cached embedding model; retrieval off the loop; skips the model when empty | `20f3c98` |
+| `shots` | Removed from `/execute` | `0e320ae` |
+| B7 simulated streaming | Unchanged on purpose; still documented | — |
+
+Still open from section 5: A5 (`/exam/end` takes a raw dict), A7 (memory depends on
+the route), A8 (`str(e)` in error responses), A9 (no input caps or rate limit),
+A10–A15, and B7.
+
+---
+
 ## 1. Summary
 
 QuantumMind is a quantum computing tutor: a React single-page app talking to a FastAPI
 backend. The backend has one LLM router that labels a chat message (theory, code, rag,
 review), plus five small LangGraph workflows: theory Q&A, Qiskit code generation,
-guided lessons, adaptive exams with rubric grading, and a RAG workflow that is built
-but never called. Only the code workflow loops: it runs the generated code in a
+guided lessons, adaptive exams with rubric grading, and a RAG workflow over uploaded
+course notes (reached only when the router labels a question `rag`). Only the code workflow loops: it runs the generated code in a
 locked-down Docker container and, if the run fails, gives the model one chance to fix
 it. All control flow is fixed in Python, and no model picks tools or decides when to
 stop, so these are **workflows, not agents**. The strongest engineering is in the
 reliability layer around the model: one LLM seam with a provider switch, retries that
 know what's worth retrying, a Redis concurrency limit shared by all workers, and an
 exam path that stores every answer in Postgres before replying and grades it later
-if the LLM is down. The weakest parts are the dead RAG path, a lesson grader that
-fails open, student text pasted raw into prompts, and logs that never reach any log.
+if the LLM is down. The weakest parts used to be a dead RAG path, a lesson grader that
+failed open, student text pasted raw into prompts and logs that went nowhere; all
+four are fixed on `fix/pre-interview` (section 0). What remains: simulated
+streaming for Code and RAG, memory that depends on the route, no input caps or
+rate limit, and injection that is mitigated rather than solved.
 It's a prototype: the sandbox is switched off on the hosted deploy, and no real class
 has used it.
 
@@ -65,7 +101,7 @@ graph LR
         CO[Code workflow]
         LA[Lesson workflows]
         XA[Exam workflows]
-        RA[RAG workflow<br/>never called]
+        RA[RAG workflow<br/>week-filtered]
         SEAM[LLM seam<br/>core/llm.py]
         LIM[Redis semaphore]
         BF[Backfill worker]
@@ -87,6 +123,7 @@ graph LR
     CH --> RO
     RO --> TH
     RO --> CO
+    RO --> RA
     LE --> LA
     XM --> XA
     CO --> EXE
@@ -104,7 +141,7 @@ graph LR
     BF --> PG
     CO --> PG
     UP --> CHR
-    RA -.-> CHR
+    RA --> CHR
 ```
 
 Startup order matters. The lifespan in `backend/app/main.py:17-54` creates the
@@ -121,7 +158,7 @@ Called by `ChatPanel.jsx:68` (theory and guided chat), `CoursePanel.jsx:43` (mod
 1. **Validation.** Pydantic parses the body into `StreamRequest`
    (`backend/app/routes/stream.py:24-30`): `message` must be non-empty, `chat_history`
    at most 50 items of at most 8000 characters each, and `thread_id` defaults to a
-   fresh UUID. `week` is accepted and never used.
+   fresh UUID. `week` (0–13) is passed to the RAG workflow.
 2. **Progress event.** The route returns a `StreamingResponse` wrapping an async
    generator (`stream.py:37-84`). Its first `yield` is a `progress` event, sent before
    any LLM work.
@@ -136,6 +173,8 @@ Called by `ChatPanel.jsx:68` (theory and guided chat), `CoursePanel.jsx:43` (mod
 5. **Code branch**: `stream_code_agent` (`backend/app/agents/code_agent.py:203-207`)
    runs the whole code graph, then splits the finished answer on spaces. The
    "streaming" is simulated.
+5b. **RAG branch** (since `20f3c98`): `stream_rag_agent` runs the RAG graph with
+   `week`, then sends the answer word by word, like Code.
 6. Each piece is sent as `data: {"type": "token", ...}\n\n`, then a `done` event. Any
    exception becomes an `error` event carrying `str(e)` (`stream.py:69-71`).
 7. **Browser side.** `EventSource` can't send a POST body, so the frontend uses
@@ -150,8 +189,8 @@ Called by `ChatPanel.jsx:68` (theory and guided chat), `CoursePanel.jsx:43` (mod
 
 - Theory runs **through the graph** with the checkpointer (`theory_agent.py:73-84`),
   so memory comes from Postgres and the request's `chat_history` is ignored.
-- `review` goes to the **Code** workflow here (`orchestrator.py:118-121`), but to
-  Theory on `/stream`.
+- `review` went to **Code** here (`orchestrator.py:118-121`) but to Theory on
+  `/stream`. Since `4951462` both paths use one table and send it to Code.
 - `agent_used` is always the string `"orchestrator"` (`chat.py:101`).
 
 `GET /api/history/{thread_id}` (`chat.py:121-139`) reads the checkpoint for a thread
@@ -189,26 +228,30 @@ in `backend/app/agents/lesson_agent.py`.
 - **`/lesson/plan`** (`backend/app/routes/lesson.py:25-32`): checks the in-memory LRU
   cache (`lesson_agent.py:92`), otherwise makes one LLM call for a JSON plan, parses it,
   caches it, and falls back to a hard-coded three-step plan on any parse error
-  (`lesson_agent.py:103-110`). The plan includes each step's `check_answer`, which
-  goes to the browser.
+  (`lesson_agent.py:103-110`). Since `64b89a4` the full plan is saved in Redis
+  (`app/core/lesson_store.py`, key `lesson:{plan_id}`, TTL a day) and the response
+  is the plan **without** any `check_answer`, plus `plan_id`.
 - **`/lesson/teach`**: formats `STEP_PROMPT` with the step's fields (`lesson_agent.py:159-174`),
   makes one call, then rewrites deprecated Qiskit in code blocks (`sanitize_content`,
   `lesson_agent.py:35-46`). `step` is an untyped `dict` (`lesson.py:15`), so a step
   missing `title` gives a 500.
-- **`/lesson/grade`**: the browser sends `question`, `correct_answer` and
-  `student_answer` (`lesson.py:19-22`, `GuidedPanel.jsx:158`). One call returns
-  `{"passed", "feedback"}`. A reply that isn't JSON counts as a **pass**
-  (`lesson_agent.py:232-233`).
+- **`/lesson/grade`**: the browser sends only `plan_id`, `step_num` and
+  `student_answer`; any extra field, `correct_answer` included, is a 422. The route
+  loads the stored plan (404 if expired), takes that step's question and key, and
+  grades. The reply must validate as `LessonGrade` (`passed` a real boolean); one
+  re-ask, then it **fails closed** with `passed: false`. (On `000f2a1` the browser
+  sent the key itself and an unreadable reply counted as a pass.)
 
 ### 2.6 `/api/exam/*`: the most carefully engineered path
 
 Called by `ExamMode.jsx` (`:135` start, `:160` answer, `:85` status poll, `:406` end)
 and `TeacherDashboard.jsx`.
 
-**Start** (`backend/app/routes/exam.py:33-66`): create the session row in Postgres
-(`exam.py:38`), generate question 1 (V1 takes it from a static bank,
-`backend/app/agents/exam_agent.py:133-137`), save the in-flight question in Postgres
-(`exam.py:47`), *then* save the hot copy in Redis.
+**Start** (`backend/app/routes/exam.py`): since `7cda94b`, generate question 1 first
+(V1 takes it from a static bank, `backend/app/agents/exam_agent.py:133-137`). If the
+LLM is down that's a 503 and **nothing is written**. Otherwise one INSERT creates
+the session already holding its first question, *then* the hot copy goes to Redis.
+(On `000f2a1` the row was created first, so an outage left an empty active session.)
 
 **Answer** (`exam.py:103-255`):
 
@@ -268,7 +311,9 @@ process (`grading_backfill.py:134-138`). Every 15 s it fetches stuck turns
 grade if ungraded, with `finalize_grade` claiming the turn through
 `UPDATE ... WHERE graded = false` (`audit_db.py:192`), then advance with
 `advance_in_flight_if` (`grading_backfill.py:92`), which only moves a session still
-parked at the expected turn.
+parked at the expected turn. Since `7f1ea77` each sweep also grades ungraded turns
+of sessions that already ended (grade only, no advance) and refreshes that
+session's `avg_score`.
 
 **End** (`exam.py:258-268`): computes the average over graded turns, marks the session
 completed, drops the Redis copy.
@@ -285,9 +330,10 @@ header, the extension must be `.pdf/.ipynb/.py/.md`, and the read is capped at 2
 (`upload.py:97-102`). The file goes to a temp file and is loaded (PyPDF, notebook JSON
 cells, or plain text), split into 800-character chunks with 100 overlap, and tagged
 with `week`. The chunks are embedded with `all-MiniLM-L6-v2` and added to Chroma
-(`upload.py:135-136`), and the temp file is deleted in `finally`. Two problems: the
-embedding is synchronous inside an `async def`, so it blocks the event loop, and
-nothing ever reads the collection.
+(`upload.py:135-136`), and the temp file is deleted in `finally`. Since `0780f94` the
+parse, embed and write run in `asyncio.to_thread(ingest_file, ...)`, and since
+`20f3c98` the vector store and a once-per-process embedding model come from
+`app/core/vectorstore.py`, which the RAG workflow reads too.
 
 ---
 
@@ -512,7 +558,8 @@ code.
 | `alembic/versions/0001–0003` | Migrations | USED (pre-deploy) | CI runs `upgrade head` |
 | `sandbox/Dockerfile` | Sandbox image | LOCAL | Sandbox tier |
 | `Dockerfile`, `railway.toml` | Prod image and deploy | USED | Not in CI |
-| `pyproject.toml` `sse-starlette`, `python-dotenv` | Declared, never imported | DEAD | — |
+| `pyproject.toml` `sse-starlette` | Declared, never imported | DEAD (removed in `c2cbd26`) | — |
+| `pyproject.toml` `python-dotenv` | Not imported by app code, but pydantic-settings uses it to read `.env` | Redundant direct pin, not dead | — |
 
 On `main` there are two more DEAD items, both removed on this branch: `cached_ideal`
 in the exam grader (`main:backend/app/agents/exam_agent.py:208`, computed and never
@@ -563,7 +610,8 @@ No frontend tests exist.
 ## 5. Bug list
 
 Status is given for both branches. **Fixed** means fixed on `fix/review-findings` and
-not yet on `main` or in the deploy.
+not yet on `main` or in the deploy. Items fixed later on `fix/pre-interview` are
+listed in section 0; the evidence below cites the code before those fixes.
 
 ### The bugs you asked about
 
@@ -640,7 +688,7 @@ because conditional `UPDATE`s and a unique constraint decide the winner. That ne
 no locks, queues or leader election.
 *Cost:* the *work* isn't idempotent, so two workers can both pay for the same grading
 call. The student waits up to a 15 s sweep plus 4 s polling. And the guarantee
-doesn't yet cover `/exam/start` (A3) or ending early (A4).
+covers `/exam/start` (A3) and ending early (A4) only since `7cda94b` and `7f1ea77`.
 
 **5. A throwaway container per run, behind an executor seam with a `disabled` mode.**
 *Gain:* strong, testable containment (no network, no env, read-only root, caps, non-root,

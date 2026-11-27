@@ -280,8 +280,8 @@ Railway's disk does not survive a redeploy. Nothing lost here is irreplaceable:
 
 | Path | Written by | Lost on redeploy | Needs a volume? |
 |---|---|---|---|
-| `<CHROMA_PATH>` | `routes/upload.py` — embeddings of uploaded PDFs/notebooks | uploaded course material | Only once RAG is reachable; today nothing reads it |
-| `~/.cache/huggingface` | `all-MiniLM-L6-v2`, ~80 MB on first embedding call | the model | No, but it re-downloads at request time, so the first upload after each deploy is slow |
+| `<CHROMA_PATH>` | `routes/upload.py` — embeddings of uploaded PDFs/notebooks | uploaded course material | Yes, if uploads should outlast a deploy: the RAG workflow reads them |
+| `~/.cache/huggingface` | `all-MiniLM-L6-v2`, ~80 MB on first embedding call | the model | No, but it re-downloads on the first upload or RAG question after each deploy |
 | `/tmp/…` | `upload.py` staging, removed in a `finally` | nothing | No |
 
 Neon and Upstash are external and completely unaffected by redeploys — that is
@@ -306,21 +306,22 @@ serving; resolve the duplicates by hand and redeploy.
 **Broken:**
 
 1. **Practice mode cannot run code** — §5, by design.
-2. **Course mode never reads uploaded material.** The orchestrator's `rag`
-   branch falls back to the theory agent; the fully-built RAG graph is
-   unreachable, so uploads are stored and never retrieved.
+2. **Uploaded course material doesn't survive a redeploy.** The RAG workflow
+   reads it, but Chroma lives on the container's disk (§7), so re-upload after
+   each deploy or attach a volume and point `CHROMA_PATH` at it. Until then,
+   RAG answers say they're from general knowledge.
 3. **Teacher auth is one shared password.** Constant-time, read from settings,
    and refused in production while it's the default, but no rate limiting, no
    lockout, no accounts. A review records what changed, not who changed it.
 4. **No rate limiting on any LLM endpoint.** `/api/stream` is public and spends
    Groq tokens per call. The Redis limiter caps concurrent calls, not requests
    per client, and no input has a length cap.
-5. **The per-call LLM records never reach Railway's logs.** They're written with
-   `logger.info`, and the app configures no logging, so Python drops them. What
-   you see in the logs is `print()` output and warnings. Use the Redis counters
-   (`llm:tokens:total:<date>`, `llm:calls:<date>`) for usage.
-6. **Guided-mode grading isn't trustworthy.** An unreadable grader reply counts as
-   a pass, and the answer key goes to the browser and comes back in the request.
+5. **Prompt injection is mitigated, not solved.** Student text is delimited and
+   escaped in every grading prompt, but a model can still be persuaded; teacher
+   review is the backstop.
+6. **Logs are JSON lines on stdout** with a `request_id` (set `LOG_LEVEL`,
+   default `INFO`). Filter on `"event": "llm_call"` for per-call usage; the
+   Redis counters (`llm:tokens:total:<date>`, `llm:calls:<date>`) hold daily totals.
 
 **Fragile under load:**
 
@@ -328,14 +329,15 @@ serving; resolve the duplicates by hand and redeploy.
    per-process. See the comment in `backend/Dockerfile`.
 8. **Duplicate backfill work across workers.** Grading writes are idempotent, but
    two workers can both call the LLM for the same pending answer.
-9. **Uploads block the server.** Embedding runs synchronously inside the async
-   `/api/upload` route, so other requests wait while a large file is embedded.
+9. **The first RAG question or upload after a deploy is slow**: it loads the
+   embedding model (and downloads it, ~80 MB, since the cache is wiped too). It
+   runs in a worker thread, so other requests aren't blocked.
 
 **Smaller:**
 
 10. `/api/cache/stats` needs no auth (it exposes only hit counts).
 11. Streamed answers are counted by call and latency; the Groq client isn't asked
     to report token usage in streams.
-12. `backend/railway.toml` says the first boot downloads the embedding model. It
-    doesn't: the model is loaded on the first upload (§7), so boot is not slowed
-    by it.
+12. Lesson plans and their answer keys live in Redis for
+    `LESSON_PLAN_TTL_SECONDS` (default a day); a student who comes back later
+    gets "This lesson has expired" and starts it again.

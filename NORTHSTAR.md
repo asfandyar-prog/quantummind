@@ -19,11 +19,11 @@ This file is the plan. What the code does today is in [README.md](README.md) and
 | 3 · Secure code execution | Done and tested locally and in CI; **off on the Railway deploy** (`EXECUTOR=disabled`, no Docker daemon) |
 | 4 · GDPR | Not started: no consent, export, erasure, retention or accounts |
 | 5 · UI | Only the "answer saved, grading catching up" exam state |
-| Observability | Not done: structured LLM logs are emitted but dropped (no logging config), `/health` checks no dependency, no documented backup and restore procedure |
+| Observability | Partly: JSON logs with a request id and LOG_LEVEL (on `fix/pre-interview`); `/health` still checks no dependency; no metrics; no documented backup and restore procedure |
 | Deployment target | Railway + Groq today, not vLLM on the university GPU |
 
 Of the known issues below, the in-flight exam question and the teacher-password
-split are fixed. The dead RAG route is still open. The file:line references in
+split are fixed, and the RAG route is wired in on `fix/pre-interview`. The file:line references in
 that section point at the code as it was then.
 
 The project has not run an exam for real students. The "~100 students" below is
