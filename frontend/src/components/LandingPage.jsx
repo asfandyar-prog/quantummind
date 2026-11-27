@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react'
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 
 const STATS = [
-  { value: '60+',  label: 'Students taught' },
+  { value: '36',   label: 'Students taught' },
   { value: '120+', label: 'Qiskit Fall Fest' },
   { value: '13',   label: 'Week curriculum'  },
   { value: '$0',   label: 'Infrastructure'   },
@@ -15,8 +15,8 @@ const FEATURES = [
   { icon: '⚛', title: 'Theory', description: 'AI tutor that adapts to your level. Ask anything about quantum computing and get a clear, structured answer.', color: '#007AFF', tag: 'Free' },
   { icon: '⌨', title: 'Practice', description: 'VS Code-quality editor. Write real Qiskit code, execute it, and see your circuit diagram instantly.', color: '#32ADE6', tag: 'Free' },
   { icon: '🎯', title: 'Guided', description: 'Step-by-step lessons with mandatory check questions. You must understand before you advance.', color: '#5856D6', tag: 'Free' },
-  { icon: '🎓', title: '13-Week Course', description: 'The full quantum computing curriculum I designed for 60+ students at University of Debrecen.', color: '#34C759', tag: 'Premium' },
-  { icon: '📝', title: 'Exam Mode', description: 'Adaptive AI examiner with rubric-based grading and human-in-the-loop teacher review.', color: '#FF9500', tag: 'Soon' },
+  { icon: '🎓', title: '13-Week Course', description: 'The full quantum computing curriculum I designed and taught to 36 students at the University of Debrecen.', color: '#34C759', tag: 'Premium' },
+  { icon: '📝', title: 'Exam Mode', description: 'Adaptive AI examiner with rubric-based grading and human-in-the-loop teacher review.', color: '#FF9500', tag: 'Research' },
 ]
 
 function FeatureCard({ f, i, hovered, setHovered, t }) {
@@ -135,7 +135,7 @@ export default function LandingPage() {
         </motion.h1>
 
         <motion.p style={{ fontSize: '20px', color: t.textSub, lineHeight: 1.55, maxWidth: '480px', marginBottom: '52px', fontWeight: 400 }} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.2 }}>
-          Five AI agents. One quantum platform.
+          An AI tutor for quantum computing, built on LangGraph workflows.
         </motion.p>
 
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: 0.3 }}>
@@ -163,7 +163,7 @@ export default function LandingPage() {
               One platform.<br />Every way to learn.
             </h2>
             <p style={{ fontSize: '17px', color: t.textMuted, maxWidth: '480px', margin: '0 auto' }}>
-              Each mode is powered by a dedicated LangGraph AI agent.
+              Each mode runs its own LangGraph workflow behind one LLM router.
             </p>
           </motion.div>
 
@@ -191,15 +191,15 @@ export default function LandingPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '56px', alignItems: 'center' }}>
             <div>
               <h2 style={{ fontSize: '36px', fontWeight: 800, letterSpacing: '-1px', color: t.text, marginBottom: '16px' }}>Built like a research lab.<br />Deployed at zero cost.</h2>
-              <p style={{ fontSize: '16px', color: t.textMuted, lineHeight: 1.7 }}>Every component mirrors production AI systems at Google DeepMind, IBM Research, and ETH Zurich's Agentic Systems Lab.</p>
+              <p style={{ fontSize: '16px', color: t.textMuted, lineHeight: 1.7 }}>Durable exam answers that survive an LLM outage, bounded LLM concurrency, and a locked-down sandbox for student code.</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               {[
-                { label: 'AI Framework', value: 'LangGraph multi-agent system', color: '#007AFF' },
-                { label: 'LLM',          value: 'Groq — 500+ tokens/sec',       color: '#5856D6' },
-                { label: 'RAG',          value: 'ChromaDB + HuggingFace',        color: '#34C759' },
-                { label: 'Execution',    value: 'Real Qiskit + IBM Quantum',     color: '#FF9500' },
-                { label: 'Streaming',    value: 'FastAPI SSE — real-time',       color: '#32ADE6' },
+                { label: 'AI Framework', value: 'LLM router + LangGraph workflows', color: '#007AFF' },
+                { label: 'LLM',          value: 'Groq · Llama 3.1 8B',           color: '#5856D6' },
+                { label: 'RAG',          value: 'ChromaDB ingest (retrieval not wired in yet)', color: '#34C759' },
+                { label: 'Execution',    value: 'Qiskit Aer in a Docker sandbox (local only)', color: '#FF9500' },
+                { label: 'Streaming',    value: 'FastAPI server-sent events',    color: '#32ADE6' },
               ].map((item, i) => (
                 <motion.div key={i} style={{ display: 'flex', alignItems: 'center', gap: '14px' }} initial={{ opacity: 0, x: 16 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true }} transition={{ delay: i * 0.07 }}>
                   <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: item.color, flexShrink: 0 }} />
